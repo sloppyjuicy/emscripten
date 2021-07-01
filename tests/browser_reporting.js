@@ -34,8 +34,16 @@ function reportErrorToServer(message) {
 if (typeof window === 'object' && window) {
   window.addEventListener('error', function(e) {
     var xhr = new XMLHttpRequest();
-    xhr.open('GET', encodeURI('http://localhost:8888?exception=' + e.message + ' / ' + e.stack));
-    xhr.send();
+    // MINIMAL_RUNTIME doesn't handle exit or call the below onExit handler
+    // so we detect the exit via the uncaught exception.
+    if (e.message.startsWith('Uncaught exit(')) {
+      var status = e.message.replace('Uncaught exit(', '')
+      status = status.replace(')', '')
+      maybeReportResultToServer('exit:' + status);
+    } else {
+      xhr.open('GET', encodeURI('http://localhost:8888?exception=' + e.message + ' / ' + e.stack));
+      xhr.send();
+    }
   });
 }
 

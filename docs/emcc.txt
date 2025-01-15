@@ -74,39 +74,44 @@ Options that are modified or new in *emcc* are listed below:
 
      This is a good setting for a release build.
 
+"-Og"
+   [compile+link] Like "-O1". In future versions, this option might
+   disable different optimizations in order to improve debuggability.
+
 "-Os"
    [compile+link] Like "-O3", but focuses more on code size (and may
-   make tradeoffs with speed). This can affect both wasm and
+   make tradeoffs with speed). This can affect both Wasm and
    JavaScript.
 
 "-Oz"
    [compile+link] Like "-Os", but reduces code size even further, and
-   may take longer to run. This can affect both wasm and JavaScript.
+   may take longer to run. This can affect both Wasm and JavaScript.
 
    Note:
 
      For more tips on optimizing your code, see Optimizing Code.
 
-"-s OPTION[=VALUE]"
+"-sOPTION[=VALUE]"
    [different OPTIONs affect at different stages, most at link time]
    Emscripten build options. For the available options, see
    src/settings.js.
 
    Note:
 
-     You can prefix boolean options with "NO_" to reverse them. For
-     example, "-s EXIT_RUNTIME=1" is the same as "-s
-     NO_EXIT_RUNTIME=0".
+     If no value is specified it will default to "1".
 
    Note:
 
-     If no value is specifed it will default to "1".
+     It is possible, with boolean options, to use the "NO_" prefix to
+     reverse their meaning. For example, "-sEXIT_RUNTIME=0" is the
+     same as "-sNO_EXIT_RUNTIME=1" and vice versa.  This is not
+     recommended in most cases.
 
    Note:
 
      Lists can be specified as comma separated strings:
 
-        -s EXPORTED_FUNCTIONS=foo,bar
+        -sEXPORTED_FUNCTIONS=foo,bar
 
    Note:
 
@@ -115,9 +120,9 @@ Options that are modified or new in *emcc* are listed below:
      and with or without brackets around the list.  For example, all
      the following are equivalent:
 
-        -s EXPORTED_FUNCTIONS="foo","bar"
-        -s EXPORTED_FUNCTIONS=["foo","bar"]
-        -s EXPORTED_FUNCTIONS=[foo,bar]
+        -sEXPORTED_FUNCTIONS="foo","bar"
+        -sEXPORTED_FUNCTIONS=["foo","bar"]
+        -sEXPORTED_FUNCTIONS=[foo,bar]
 
    Note:
 
@@ -125,14 +130,14 @@ Options that are modified or new in *emcc* are listed below:
      marks (") around the list in most shells (to avoid errors being
      raised). Two examples are shown below:
 
-        -s EXPORTED_FUNCTIONS="['liblib.so']"
-        -s "EXPORTED_FUNCTIONS=['liblib.so']"
+        -sEXPORTED_FUNCTIONS="['liblib.so']"
+        -s"EXPORTED_FUNCTIONS=['liblib.so']"
 
    You can also specify that the value of an option will be read from
    a file. For example, the following will set "EXPORTED_FUNCTIONS"
    based on the contents of the file at **path/to/file**.
 
-      -s EXPORTED_FUNCTIONS=@/path/to/file
+      -sEXPORTED_FUNCTIONS=@/path/to/file
 
    Note:
 
@@ -142,10 +147,14 @@ Options that are modified or new in *emcc* are listed below:
 
      * The specified file path must be absolute, not relative.
 
+     * The file may contain comments where the first character of the
+       line is "'#'".
+
    Note:
 
-     Options can be specified as a single argument without a space
-     between the "-s" and option name.  e.g. "-sFOO=1".
+     Options can be specified as a single argument with or without a
+     space between the "-s" and option name.  e.g. "-sFOO" or "-s
+     FOO". It's highly recommended you use the notation without space.
 
 "-g"
    [compile+link] Preserve debug information.
@@ -160,17 +169,27 @@ Options that are modified or new in *emcc* are listed below:
    Preserve debug information, but in a separate file on the side.
    This is the same as "-g", but the main file will contain no debug
    info. Instead, debug info will be present in a file on the side, in
-   "FILENAME" if provided, otherwise the same as the wasm file but
+   "FILENAME" if provided, otherwise the same as the Wasm file but
    with suffix ".debug.wasm". While the main file contains no debug
    info, it does contain a URL to where the debug file is, so that
-   devtools can find it. You can use "-s SEPARATE_DWARF_URL=URL" to
+   devtools can find it. You can use "-sSEPARATE_DWARF_URL=URL" to
    customize that location (this is useful if you want to host it on a
    different server, for example).
 
+"-gsplit-dwarf"
+   Enable debug fission, which creates split DWARF object files
+   alongside the wasm object files. This option must be used together
+   with "-c".
+
 "-gsource-map"
-   When linking, generate a source map using LLVM debug information
-   (which must be present in object files, i.e., they should have been
-   compiled with "-g").
+   [link] Generate a source map using LLVM debug information (which
+   must be present in object files, i.e., they should have been
+   compiled with "-g"). When this option is provided, the **.wasm**
+   file is updated to have a "sourceMappingURL" section. The resulting
+   URL will have format: "<base-url>" + "<wasm-file-name>" + ".map".
+   "<base-url>" defaults to being empty (which means the source map is
+   served from the same directory as the Wasm file). It can be changed
+   using --source-map-base.
 
 "-g<level>"
    [compile+link] Controls the level of debuggability. Each level
@@ -203,17 +222,29 @@ Options that are modified or new in *emcc* are listed below:
 "--tracing"
    [link] Enable the Emscripten Tracing API.
 
+"--reproduce=<file.tar>"
+   [compile+link] Write tar file containing inputs and command to
+   reproduce invocation.  When sharing this file be aware that it will
+   any object files, source files and libraries that that were passed
+   to the compiler.
+
 "--emit-symbol-map"
-   [link] Save a map file between function indexes in the wasm and
+   [link] Save a map file between function indexes in the Wasm and
    function names. By storing the names on a file on the side, you can
    avoid shipping the names, and can still reconstruct meaningful
    stack traces by translating the indexes back to the names.
 
    Note:
 
-     When used with "-s WASM=2", two symbol files are created.
+     When used with "-sWASM=2", two symbol files are created.
      "[name].js.symbols" (with WASM symbols) and
      "[name].wasm.js.symbols" (with ASM.js symbols)
+
+"--emit-minification-map <file>"
+   [link] In cases where emscripten performs import/export minificiton
+   this option can be used to output a file that maps minified names
+   back to their original names.  The format of this file is single
+   line per import/export of the form "<minname>:<origname>".
 
 "-flto"
    [compile+link] Enables link-time optimizations (LTO).
@@ -221,7 +252,7 @@ Options that are modified or new in *emcc* are listed below:
 "--closure 0|1|2"
    [link] Runs the *Closure Compiler*. Possible values are:
 
-      * "0": No closure compiler (default in "-O2" and below).
+      * "0": No closure compiler (default).
 
       * "1": Run closure compiler. This greatly reduces the size of
         the support JavaScript code (everything but the WebAssembly or
@@ -235,7 +266,7 @@ Options that are modified or new in *emcc* are listed below:
 
    Note:
 
-     * Consider using "-s MODULARIZE=1" when using closure, as it
+     * Consider using "-sMODULARIZE" when using closure, as it
        minifies globals to names that might conflict with others in
        the global scope. "MODULARIZE" puts all the output into a
        function (see "src/settings.js").
@@ -245,13 +276,6 @@ Options that are modified or new in *emcc* are listed below:
        to make sure a global variable called *Module* already exists
        before the closure-compiled code runs, because then it will
        reuse that variable.
-
-     * If closure compiler hits an out-of-memory, try adjusting
-       "JAVA_HEAP_SIZE" in the environment (for example, to 4096m for
-       4GB).
-
-     * Closure is only run if JavaScript opts are being done ("-O2" or
-       above).
 
 "--closure-args=<args>"
    [link] Pass arguments to the *Closure compiler*. This is an
@@ -300,8 +324,8 @@ Options that are modified or new in *emcc* are listed below:
 
 "--embed-file <file>"
    [link] Specify a file (with path) to embed inside the generated
-   JavaScript. The path is relative to the current directory at
-   compile time. If a directory is passed here, its entire contents
+   WebAssembly module. The path is relative to the current directory
+   at compile time. If a directory is passed here, its entire contents
    will be embedded.
 
    For example, if the command includes "--embed-file dir/file.dat",
@@ -310,9 +334,8 @@ Options that are modified or new in *emcc* are listed below:
 
    Note:
 
-     Embedding files is much less efficient than preloading them. You
-     should only use it for small files, in small numbers. Instead use
-     "--preload-file", which emits efficient binary data.
+     Embedding files is generally more efficient than preloading as it
+     avoids copying the file data at runtime.
 
    For more information about the "--embed-file" options, see
    Packaging Files.
@@ -364,10 +387,8 @@ Options that are modified or new in *emcc* are listed below:
        specified using the "-o" option.
 
 "--source-map-base <base-url>"
-   [link] The URL for the location where WebAssembly source maps will
-   be published. When this option is provided, the **.wasm** file is
-   updated to have a "sourceMappingURL" section. The resulting URL
-   will have format: "<base-url>" + "<wasm-file-name>" + ".map".
+   [link] The base URL for the location where WebAssembly source maps
+   will be published. Must be used with -gsource-map.
 
 "--minify 0"
    [same as -g1 if passed at compile time, otherwise applies at link]
@@ -390,6 +411,17 @@ Options that are modified or new in *emcc* are listed below:
 "--bind"
    [link] Links against embind library.  Deprecated: Use "-lembind"
    instead.
+
+"--embind-emit-tsd <path>"
+   [link] Generates TypeScript definition file.  Deprecated: Use "--
+   emit-tsd" instead.
+
+"--emit-tsd <path>"
+   [link] Generate a TypeScript definition file for the emscripten
+   module. The definition file will include exported Wasm functions,
+   runtime exports, and exported embind bindings (if used). In order
+   to generate bindings from embind, the program will be instrumented
+   and run in node.
 
 "--ignore-dynamic-linking"
    [link] Tells the compiler to ignore dynamic linking (the user will
@@ -446,6 +478,16 @@ Options that are modified or new in *emcc* are listed below:
    By default this will also clear any download ports since the ports
    directory is usually within the cache directory.
 
+"--use-port=<port>"
+   [compile+link] Use the specified port. If you need to use more than
+   one port you can use this option multiple times (ex: "--use-
+   port=sdl2 --use-port=bzip2"). A port can have options separated by
+   ":" (ex: "--use-port=sdl2_image:formats=png,jpg"). To use an
+   external port, you provide the path to the port directly (ex: "--
+   use-port=/path/to/my_port.py"). To get more information about a
+   port, use the "help" option (ex: "--use-port=sdl2_image:help"). To
+   get the list of available ports, use "--show-ports".
+
 "--clear-ports"
    [general] Manually clears the local copies of ports from the
    Emscripten Ports repos (sdl2, etc.). This also clears the cache, to
@@ -459,49 +501,6 @@ Options that are modified or new in *emcc* are listed below:
    [general] Shows the list of available projects in the Emscripten
    Ports repos. After this operation is complete, this process will
    exit.
-
-"--memory-init-file 0|1"
-   [link] Specifies whether to emit a separate memory initialization
-   file.
-
-      Note:
-
-        Note that this is only relevant when *not* emitting wasm, as
-        wasm embeds the memory init data in the wasm binary.
-
-   Possible values are:
-
-      * "0": Do not emit a separate memory initialization file.
-        Instead keep the static initialization inside the generated
-        JavaScript as text. This is the default setting if compiling
-        with -O0 or -O1 link-time optimization flags.
-
-      * "1": Emit a separate memory initialization file in binary
-        format. This is more efficient than storing it as text inside
-        JavaScript, but does mean you have another file to publish.
-        The binary file will also be loaded asynchronously, which
-        means "main()" will not be called until the file is downloaded
-        and applied; you cannot call any C functions until it arrives.
-        This is the default setting when compiling with -O2 or higher.
-
-        Note:
-
-          The safest way to ensure that it is safe to call C functions
-          (the initialisation file has loaded) is to call a notifier
-          function from "main()".
-
-        Note:
-
-          If you assign a network request to
-          "Module.memoryInitializerRequest" (before the script runs),
-          then it will use that request instead of automatically
-          starting a download for you. This is beneficial in that you
-          can, in your HTML, fire off a request for the memory init
-          file before the script actually arrives. For this to work,
-          the network request should be an XMLHttpRequest with
-          responseType set to "'arraybuffer'". (You can also put any
-          other object here, all it must provide is a ".response"
-          property containing an ArrayBuffer.)
 
 "-Wwarn-absolute-paths"
    [compile+link] Enables warnings about the use of absolute paths in
@@ -536,7 +535,7 @@ Options that are modified or new in *emcc* are listed below:
 "--threadprofiler"
    [link] Embeds a thread activity profiler onto the generated page.
    Use this to profile the application usage of pthreads when
-   targeting multithreaded builds (-s USE_PTHREADS=1/2).
+   targeting multithreaded builds (-pthread).
 
 "--em-config <path>"
    [general] Specifies the location of the **.emscripten**
@@ -544,13 +543,6 @@ Options that are modified or new in *emcc* are listed below:
    ".emscripten" first in the emscripten directory itself, and then in
    the user's home directory ("~/.emscripten"). This can be overridden
    using the "EM_CONFIG" environment variable.
-
-"--default-obj-ext <.ext>"
-   [compile] Specifies the output suffix to use when compiling with
-   "-c" in the absence of "-o".  For example, when compiling multiple
-   sources files with "emcc -c *.c" the compiler will normally output
-   files with the ".o" extension, but "--default-obj-ext .obj" can be
-   used to instead generate files with the *.obj* extension.
 
 "--valid-abspath <path>"
    [compile+link] Note an allowed absolute path, which we should not
@@ -573,15 +565,10 @@ Options that are modified or new in *emcc* are listed below:
         WebAssembly).
 
       * <name> **.wasm** : WebAssembly without JavaScript support code
-        ("standalone wasm"; this enables "STANDALONE_WASM").
+        ("standalone Wasm"; this enables "STANDALONE_WASM").
 
    These rules only apply when linking.  When compiling to object code
    (See *-c* below) the name of the output file is irrelevant.
-
-   Note:
-
-     If "--memory-init-file" is used, a **.mem** file will be created
-     in addition to the generated **.js** and/or **.html** file.
 
 "-c"
    [compile] Tells *emcc* to emit an object file which can then be

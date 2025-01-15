@@ -4,15 +4,16 @@
  * SPDX-License-Identifier: MIT
  */
 
-mergeInto(LibraryManager.library, {
+addToLibrary({
   $PATH: {
+    isAbs: (path) => path.charAt(0) === '/',
     // split a filename into [root, dir, basename, ext], unix version
     // 'root' is just a slash, or nothing.
-    splitPath: function(filename) {
+    splitPath: (filename) => {
       var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
       return splitPathRe.exec(filename).slice(1);
     },
-    normalizeArray: function(parts, allowAboveRoot) {
+    normalizeArray: (parts, allowAboveRoot) => {
       // if the path tries to go above the root, `up` ends up > 0
       var up = 0;
       for (var i = parts.length - 1; i >= 0; i--) {
@@ -35,13 +36,11 @@ mergeInto(LibraryManager.library, {
       }
       return parts;
     },
-    normalize: function(path) {
-      var isAbsolute = path.charAt(0) === '/',
+    normalize: (path) => {
+      var isAbsolute = PATH.isAbs(path),
           trailingSlash = path.substr(-1) === '/';
       // Normalize the path
-      path = PATH.normalizeArray(path.split('/').filter(function(p) {
-        return !!p;
-      }), !isAbsolute).join('/');
+      path = PATH.normalizeArray(path.split('/').filter((p) => !!p), !isAbsolute).join('/');
       if (!path && !isAbsolute) {
         path = '.';
       }
@@ -50,7 +49,7 @@ mergeInto(LibraryManager.library, {
       }
       return (isAbsolute ? '/' : '') + path;
     },
-    dirname: function(path) {
+    dirname: (path) => {
       var result = PATH.splitPath(path),
           root = result[0],
           dir = result[1];
@@ -64,35 +63,29 @@ mergeInto(LibraryManager.library, {
       }
       return root + dir;
     },
-    basename: function(path) {
-      // EMSCRIPTEN return '/'' for '/', not an empty string
-      if (path === '/') return '/';
-      path = PATH.normalize(path);
-      path = path.replace(/\/$/, "");
-      var lastSlash = path.lastIndexOf('/');
-      if (lastSlash === -1) return path;
-      return path.substr(lastSlash+1);
-    },
-    extname: function(path) {
-      return PATH.splitPath(path)[3];
-    },
-    join: function() {
-      var paths = Array.prototype.slice.call(arguments, 0);
-      return PATH.normalize(paths.join('/'));
-    },
-    join2: function(l, r) {
-      return PATH.normalize(l + '/' + r);
-    },
+    // This differs from node's path.basename in that it returns '/' for '/'
+    // rather than the empty string.
+    basename: (path) => path && path.match(/([^\/]+|\/)\/*$/)[1],
+    join: (...paths) => PATH.normalize(paths.join('/')),
+    join2: (l, r) => PATH.normalize(l + '/' + r),
   },
   // The FS-using parts are split out into a separate object, so simple path
   // usage does not require the FS.
-  $PATH_FS__deps: ['$PATH', '$FS'],
+  $PATH_FS__deps: [
+    '$PATH',
+    '$FS',
+#if WASMFS
+    // In WasmFS, FS.cwd() is implemented via a call into wasm, so we need to
+    // add a dependency on that.
+    '_wasmfs_get_cwd',
+#endif
+  ],
   $PATH_FS: {
-    resolve: function() {
+    resolve: (...args) => {
       var resolvedPath = '',
         resolvedAbsolute = false;
-      for (var i = arguments.length - 1; i >= -1 && !resolvedAbsolute; i--) {
-        var path = (i >= 0) ? arguments[i] : FS.cwd();
+      for (var i = args.length - 1; i >= -1 && !resolvedAbsolute; i--) {
+        var path = (i >= 0) ? args[i] : FS.cwd();
         // Skip empty and invalid entries
         if (typeof path != 'string') {
           throw new TypeError('Arguments to path.resolve must be strings');
@@ -100,16 +93,14 @@ mergeInto(LibraryManager.library, {
           return ''; // an invalid portion invalidates the whole thing
         }
         resolvedPath = path + '/' + resolvedPath;
-        resolvedAbsolute = path.charAt(0) === '/';
+        resolvedAbsolute = PATH.isAbs(path);
       }
       // At this point the path should be resolved to a full absolute path, but
       // handle relative paths to be safe (might happen when process.cwd() fails)
-      resolvedPath = PATH.normalizeArray(resolvedPath.split('/').filter(function(p) {
-        return !!p;
-      }), !resolvedAbsolute).join('/');
+      resolvedPath = PATH.normalizeArray(resolvedPath.split('/').filter((p) => !!p), !resolvedAbsolute).join('/');
       return ((resolvedAbsolute ? '/' : '') + resolvedPath) || '.';
     },
-    relative: function(from, to) {
+    relative: (from, to) => {
       from = PATH_FS.resolve(from).substr(1);
       to = PATH_FS.resolve(to).substr(1);
       function trim(arr) {

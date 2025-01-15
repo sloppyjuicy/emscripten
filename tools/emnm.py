@@ -4,7 +4,7 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-"""Wrapper scripte around `llvm-nm`.
+"""Wrapper script around `llvm-nm`.
 """
 
 import os
@@ -12,9 +12,8 @@ import sys
 
 __scriptdir__ = os.path.dirname(os.path.abspath(__file__))
 __rootdir__ = os.path.dirname(__scriptdir__)
-sys.path.append(__rootdir__)
+sys.path.insert(0, __rootdir__)
 
 from tools import shared
 
-cmd = [shared.LLVM_NM] + sys.argv[1:]
-sys.exit(shared.run_process(cmd, stdin=sys.stdin, check=False).returncode)
+shared.exec_process([shared.LLVM_NM] + sys.argv[1:])

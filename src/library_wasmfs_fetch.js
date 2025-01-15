@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-mergeInto(LibraryManager.library, {
+addToLibrary({
   // Fetch backend: On first access of the file (either a read or a getSize), it
   // will fetch() the data from the network asynchronously. Otherwise, after
   // that fetch it behaves just like JSFile (and it reuses the code from there).
@@ -13,6 +13,7 @@ mergeInto(LibraryManager.library, {
     '$wasmFS$backends',
     '$wasmFS$JSMemoryFiles',
     '_wasmfs_create_js_file_backend_js',
+    '_wasmfs_fetch_get_file_path',
   ],
   _wasmfs_create_fetch_backend_js: async function(backend) {
     // Get a promise that fetches the data and stores it in JS memory (if it has
@@ -23,13 +24,27 @@ mergeInto(LibraryManager.library, {
         // the actual read below.
         return Promise.resolve();
       }
-
       // This is the first time we want the file's data.
-      // TODO: real URL!
-      var url = 'data.dat';
+      var url = '';
+      var fileUrl_p = __wasmfs_fetch_get_file_path(file);
+      var fileUrl = UTF8ToString(fileUrl_p);
+      var isAbs = fileUrl.indexOf('://') !== -1;
+      if (isAbs) {
+        url = fileUrl;
+      } else {
+        try {
+          var u = new URL(fileUrl, self.location.origin);
+          url = u.toString();
+        } catch (e) {
+        }
+      }
       var response = await fetch(url);
-      var buffer = await response['arrayBuffer']();
-      wasmFS$JSMemoryFiles[file] = new Uint8Array(buffer);
+      if (response.ok) {
+        var buffer = await response['arrayBuffer']();
+        wasmFS$JSMemoryFiles[file] = new Uint8Array(buffer);
+      } else {
+        throw response;
+      }
     }
 
     // Start with the normal JSFile operations. This sets
@@ -57,13 +72,20 @@ mergeInto(LibraryManager.library, {
 
       // read/getSize fetch the data, then forward to the parent class.
       read: async (file, buffer, length, offset) => {
-        await getFile(file);
+        try {
+          await getFile(file);
+        } catch (response) {
+          return response.status === 404 ? -{{{ cDefs.ENOENT }}} : -{{{ cDefs.EBADF }}};
+        }
         return jsFileOps.read(file, buffer, length, offset);
       },
-      getSize: async(file) => {
-        await getFile(file);
+      getSize: async (file) => {
+        try {
+          await getFile(file);
+        } catch (response) {}
         return jsFileOps.getSize(file);
       },
     };
   },
+
 });

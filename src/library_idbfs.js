@@ -4,23 +4,102 @@
  * SPDX-License-Identifier: MIT
  */
 
-mergeInto(LibraryManager.library, {
+addToLibrary({
   $IDBFS__deps: ['$FS', '$MEMFS', '$PATH'],
+  $IDBFS__postset: () => {
+    addAtExit('IDBFS.quit();');
+    return '';
+  },
   $IDBFS: {
     dbs: {},
     indexedDB: () => {
       if (typeof indexedDB != 'undefined') return indexedDB;
       var ret = null;
       if (typeof window == 'object') ret = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+#if ASSERTIONS
       assert(ret, 'IDBFS used, but indexedDB not supported');
+#endif
       return ret;
     },
     DB_VERSION: 21,
     DB_STORE_NAME: 'FILE_DATA',
-    mount: function(mount) {
-      // reuse all of the core MEMFS functionality
-      return MEMFS.mount.apply(null, arguments);
+
+    // Queues a new VFS -> IDBFS synchronization operation
+    queuePersist: (mount) => {
+      function onPersistComplete() {
+        if (mount.idbPersistState === 'again') startPersist(); // If a new sync request has appeared in between, kick off a new sync
+        else mount.idbPersistState = 0; // Otherwise reset sync state back to idle to wait for a new sync later
+      }
+      function startPersist() {
+        mount.idbPersistState = 'idb'; // Mark that we are currently running a sync operation
+        IDBFS.syncfs(mount, /*populate:*/false, onPersistComplete);
+      }
+
+      if (!mount.idbPersistState) {
+        // Programs typically write/copy/move multiple files in the in-memory
+        // filesystem within a single app frame, so when a filesystem sync
+        // command is triggered, do not start it immediately, but only after
+        // the current frame is finished. This way all the modified files
+        // inside the main loop tick will be batched up to the same sync.
+        mount.idbPersistState = setTimeout(startPersist, 0);
+      } else if (mount.idbPersistState === 'idb') {
+        // There is an active IndexedDB sync operation in-flight, but we now
+        // have accumulated more files to sync. We should therefore queue up
+        // a new sync after the current one finishes so that all writes
+        // will be properly persisted.
+        mount.idbPersistState = 'again';
+      }
     },
+
+    mount: (mount) => {
+      // reuse core MEMFS functionality
+      var mnt = MEMFS.mount(mount);
+      // If the automatic IDBFS persistence option has been selected, then automatically persist
+      // all modifications to the filesystem as they occur.
+      if (mount?.opts?.autoPersist) {
+        mnt.idbPersistState = 0; // IndexedDB sync starts in idle state
+        var memfs_node_ops = mnt.node_ops;
+        mnt.node_ops = Object.assign({}, mnt.node_ops); // Clone node_ops to inject write tracking
+        mnt.node_ops.mknod = (parent, name, mode, dev) => {
+          var node = memfs_node_ops.mknod(parent, name, mode, dev);
+          // Propagate injected node_ops to the newly created child node
+          node.node_ops = mnt.node_ops;
+          // Remember for each IDBFS node which IDBFS mount point they came from so we know which mount to persist on modification.
+          node.idbfs_mount = mnt.mount;
+          // Remember original MEMFS stream_ops for this node
+          node.memfs_stream_ops = node.stream_ops;
+          // Clone stream_ops to inject write tracking
+          node.stream_ops = Object.assign({}, node.stream_ops);
+
+          // Track all file writes
+          node.stream_ops.write = (stream, buffer, offset, length, position, canOwn) => {
+            // This file has been modified, we must persist IndexedDB when this file closes
+            stream.node.isModified = true;
+            return node.memfs_stream_ops.write(stream, buffer, offset, length, position, canOwn);
+          };
+
+          // Persist IndexedDB on file close
+          node.stream_ops.close = (stream) => {
+            var n = stream.node;
+            if (n.isModified) {
+              IDBFS.queuePersist(n.idbfs_mount);
+              n.isModified = false;
+            }
+            if (n.memfs_stream_ops.close) return n.memfs_stream_ops.close(stream);
+          };
+
+          return node;
+        };
+        // Also kick off persisting the filesystem on other operations that modify the filesystem.
+        mnt.node_ops.mkdir   = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.mkdir(...args));
+        mnt.node_ops.rmdir   = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.rmdir(...args));
+        mnt.node_ops.symlink = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.symlink(...args));
+        mnt.node_ops.unlink  = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.unlink(...args));
+        mnt.node_ops.rename  = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.rename(...args));
+      }
+      return mnt;
+    },
+
     syncfs: (mount, populate, callback) => {
       IDBFS.getLocalSet(mount, (err, local) => {
         if (err) return callback(err);
@@ -34,6 +113,10 @@ mergeInto(LibraryManager.library, {
           IDBFS.reconcile(src, dst, callback);
         });
       });
+    },
+    quit: () => {
+      Object.values(IDBFS.dbs).forEach((value) => value.close());
+      IDBFS.dbs = {};
     },
     getDB: (name, callback) => {
       // check the cache first
@@ -75,7 +158,7 @@ mergeInto(LibraryManager.library, {
         callback(null, db);
       };
       req.onerror = (e) => {
-        callback(this.error);
+        callback(e.target.error);
         e.preventDefault();
       };
     },
@@ -86,9 +169,7 @@ mergeInto(LibraryManager.library, {
         return p !== '.' && p !== '..';
       };
       function toAbsolute(root) {
-        return (p) => {
-          return PATH.join2(root, p);
-        }
+        return (p) => PATH.join2(root, p);
       };
 
       var check = FS.readdir(mount.mountpoint).filter(isRealDir).map(toAbsolute(mount.mountpoint));
@@ -104,7 +185,7 @@ mergeInto(LibraryManager.library, {
         }
 
         if (FS.isDir(stat.mode)) {
-          check.push.apply(check, FS.readdir(path).filter(isRealDir).map(toAbsolute(path)));
+          check.push(...FS.readdir(path).filter(isRealDir).map(toAbsolute(path)));
         }
 
         entries[path] = { 'timestamp': stat.mtime };
@@ -121,7 +202,7 @@ mergeInto(LibraryManager.library, {
         try {
           var transaction = db.transaction([IDBFS.DB_STORE_NAME], 'readonly');
           transaction.onerror = (e) => {
-            callback(this.error);
+            callback(e.target.error);
             e.preventDefault();
           };
 
@@ -132,7 +213,7 @@ mergeInto(LibraryManager.library, {
             var cursor = event.target.result;
 
             if (!cursor) {
-              return callback(null, { type: 'remote', db: db, entries: entries });
+              return callback(null, { type: 'remote', db, entries });
             }
 
             entries[cursor.primaryKey] = { 'timestamp': cursor.key };
@@ -186,7 +267,6 @@ mergeInto(LibraryManager.library, {
     },
     removeLocalEntry: (path, callback) => {
       try {
-        var lookup = FS.lookupPath(path);
         var stat = FS.stat(path);
 
         if (FS.isDir(stat.mode)) {
@@ -202,9 +282,9 @@ mergeInto(LibraryManager.library, {
     },
     loadRemoteEntry: (store, path, callback) => {
       var req = store.get(path);
-      req.onsuccess = (event) => { callback(null, event.target.result); };
+      req.onsuccess = (event) => callback(null, event.target.result);
       req.onerror = (e) => {
-        callback(this.error);
+        callback(e.target.error);
         e.preventDefault();
       };
     },
@@ -215,17 +295,17 @@ mergeInto(LibraryManager.library, {
         callback(e);
         return;
       }
-      req.onsuccess = () => { callback(null); };
+      req.onsuccess = (event) => callback();
       req.onerror = (e) => {
-        callback(this.error);
+        callback(e.target.error);
         e.preventDefault();
       };
     },
     removeRemoteEntry: (store, path, callback) => {
       var req = store.delete(path);
-      req.onsuccess = () => { callback(null); };
+      req.onsuccess = (event) => callback();
       req.onerror = (e) => {
-        callback(this.error);
+        callback(e.target.error);
         e.preventDefault();
       };
     },
@@ -233,7 +313,7 @@ mergeInto(LibraryManager.library, {
       var total = 0;
 
       var create = [];
-      Object.keys(src.entries).forEach(function (key) {
+      Object.keys(src.entries).forEach((key) => {
         var e = src.entries[key];
         var e2 = dst.entries[key];
         if (!e2 || e['timestamp'].getTime() != e2['timestamp'].getTime()) {
@@ -243,7 +323,7 @@ mergeInto(LibraryManager.library, {
       });
 
       var remove = [];
-      Object.keys(dst.entries).forEach(function (key) {
+      Object.keys(dst.entries).forEach((key) => {
         if (!src.entries[key]) {
           remove.push(key);
           total++;
@@ -266,8 +346,9 @@ mergeInto(LibraryManager.library, {
         }
       };
 
-      transaction.onerror = (e) => {
-        done(this.error);
+      // transaction may abort if (for example) there is a QuotaExceededError
+      transaction.onerror = transaction.onabort = (e) => {
+        done(e.target.error);
         e.preventDefault();
       };
 
@@ -305,3 +386,7 @@ mergeInto(LibraryManager.library, {
     }
   }
 });
+
+if (WASMFS) {
+  error("using -lidbfs is not currently supported in WasmFS.");
+}

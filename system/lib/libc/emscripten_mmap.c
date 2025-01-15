@@ -13,8 +13,8 @@
 #include <sys/mman.h>
 
 #include <emscripten/heap.h>
-#include <emscripten/emmalloc.h>
 
+#include "emscripten_internal.h"
 #include "lock.h"
 #include "syscall.h"
 
@@ -29,16 +29,13 @@ struct map {
   struct map* next;
 } __attribute__((aligned (1)));
 
+#define ALIGN_TO(value,alignment) (((value) + ((alignment) - 1)) & ~((alignment) - 1))
+
 // Linked list of all mapping, guarded by a musl-style lock (LOCK/UNLOCK)
 static volatile int lock[1];
 static struct map* mappings;
 
-// JS library functions.  Used only when mapping files (not MAP_ANONYMOUS)
-long _mmap_js(long addr, long length, long prot, long flags, long fd, long offset, int* allocated);
-long _munmap_js(long addr, long length, long prot, long flags, long fd, long offset);
-long _msync_js(long addr, long length, long flags, long fd);
-
-static struct map* find_mapping(long addr, struct map** prev) {
+static struct map* find_mapping(intptr_t addr, struct map** prev) {
   struct map* map = mappings;
   while (map) {
     if (map->addr == (void*)addr) {
@@ -52,7 +49,7 @@ static struct map* find_mapping(long addr, struct map** prev) {
   return map;
 }
 
-long __syscall_munmap(long addr, long length) {
+int __syscall_munmap(intptr_t addr, size_t length) {
   LOCK(lock);
   struct map* prev = NULL;
   struct map* map = find_mapping(addr, &prev);
@@ -76,10 +73,7 @@ long __syscall_munmap(long addr, long length) {
   UNLOCK(lock);
 
   if (!(map->flags & MAP_ANONYMOUS)) {
-    int rtn = _munmap_js(addr, length, map->prot, map->flags, map->fd, map->offset);
-    if (rtn) {
-      return rtn;
-    }
+    _munmap_js(addr, length, map->prot, map->flags, map->fd, map->offset);
   }
 
   // Release the memory.
@@ -95,7 +89,7 @@ long __syscall_munmap(long addr, long length) {
   return 0;
 }
 
-long __syscall_msync(long addr, long len, long flags) {
+int __syscall_msync(intptr_t addr, size_t len, int flags) {
   LOCK(lock);
   struct map* map = find_mapping(addr, NULL);
   UNLOCK(lock);
@@ -105,46 +99,47 @@ long __syscall_msync(long addr, long len, long flags) {
   if (map->flags & MAP_ANONYMOUS) {
     return 0;
   }
-  return _msync_js(addr, len, map->flags, map->fd);
+  return _msync_js(addr, len, map->prot, map->flags, map->fd, map->offset);
 }
 
-long __syscall_mmap2(long addr, long len, long prot, long flags, long fd, long off) {
-  // addr argument must be page aligned if MAP_FIXED flag is set.
-  if (flags & MAP_FIXED && (addr % WASM_PAGE_SIZE) != 0) {
+intptr_t __syscall_mmap2(intptr_t addr, size_t len, int prot, int flags, int fd, off_t offset) {
+  if (addr != 0) {
+    // We don't currently support location hints for the address of the mapping
     return -EINVAL;
   }
 
-  off *= SYSCALL_MMAP2_UNIT;
+  offset *= SYSCALL_MMAP2_UNIT;
   struct map* new_map;
 
   // MAP_ANONYMOUS (aka MAP_ANON) isn't actually defined by POSIX spec,
   // but it is widely used way to allocate memory pages on Linux, BSD and Mac.
   // In this case fd argument is ignored.
   if (flags & MAP_ANONYMOUS) {
+    size_t alloc_len = ALIGN_TO(len, 16);
     // For anonymous maps, allocate that mapping at the end of the region.
-    void* ptr = emscripten_builtin_memalign(WASM_PAGE_SIZE, len + sizeof(struct map));
+    void* ptr = emscripten_builtin_memalign(WASM_PAGE_SIZE, alloc_len + sizeof(struct map));
     if (!ptr) {
       return -ENOMEM;
     }
-    memset(ptr, 0, len);
-    new_map = (struct map*)((char*)ptr + len);
+    memset(ptr, 0, alloc_len);
+    new_map = (struct map*)((char*)ptr + alloc_len);
     new_map->addr = ptr;
     new_map->fd = -1;
     new_map->allocated = true;
   } else {
     new_map = emscripten_builtin_malloc(sizeof(struct map));
-    long rtn = _mmap_js(addr, len, prot, flags, fd, off, &new_map->allocated);
+    int rtn =
+      _mmap_js(len, prot, flags, fd, offset, &new_map->allocated, &new_map->addr);
     if (rtn < 0) {
       emscripten_builtin_free(new_map);
       return rtn;
     }
-    new_map->addr = (void*)rtn;
     new_map->fd = fd;
   }
 
   new_map->length = len;
   new_map->flags = flags;
-  new_map->offset = off;
+  new_map->offset = offset;
   new_map->prot = prot;
 
   LOCK(lock);

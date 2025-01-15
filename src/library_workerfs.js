@@ -4,15 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-mergeInto(LibraryManager.library, {
+addToLibrary({
   $WORKERFS__deps: ['$FS'],
   $WORKERFS: {
-    DIR_MODE: {{{ cDefine('S_IFDIR') }}} | 511 /* 0777 */,
-    FILE_MODE: {{{ cDefine('S_IFREG') }}} | 511 /* 0777 */,
+    DIR_MODE: {{{ cDefs.S_IFDIR | 0o777 }}},
+    FILE_MODE: {{{ cDefs.S_IFREG | 0o777 }}},
     reader: null,
-    mount: function (mount) {
+    mount(mount) {
       assert(ENVIRONMENT_IS_WORKER);
-      if (!WORKERFS.reader) WORKERFS.reader = new FileReaderSync();
+      WORKERFS.reader ??= new FileReaderSync();
       var root = WORKERFS.createNode(null, '/', WORKERFS.DIR_MODE, 0);
       var createdParents = {};
       function ensureParent(path) {
@@ -28,9 +28,7 @@ mergeInto(LibraryManager.library, {
           // are just their corresponding parts within their given path,
           // rather than incremental aggregates which include their parent's
           // directories.
-          if (!createdParents[curr]) {
-            createdParents[curr] = WORKERFS.createNode(parent, parts[i], WORKERFS.DIR_MODE, 0);
-          }
+          createdParents[curr] ||= WORKERFS.createNode(parent, parts[i], WORKERFS.DIR_MODE, 0);
           parent = createdParents[curr];
         }
         return parent;
@@ -43,23 +41,23 @@ mergeInto(LibraryManager.library, {
       Array.prototype.forEach.call(mount.opts["files"] || [], function(file) {
         WORKERFS.createNode(ensureParent(file.name), base(file.name), WORKERFS.FILE_MODE, 0, file, file.lastModifiedDate);
       });
-      (mount.opts["blobs"] || []).forEach(function(obj) {
+      (mount.opts["blobs"] || []).forEach((obj) => {
         WORKERFS.createNode(ensureParent(obj["name"]), base(obj["name"]), WORKERFS.FILE_MODE, 0, obj["data"]);
       });
-      (mount.opts["packages"] || []).forEach(function(pack) {
-        pack['metadata'].files.forEach(function(file) {
+      (mount.opts["packages"] || []).forEach((pack) => {
+        pack['metadata'].files.forEach((file) => {
           var name = file.filename.substr(1); // remove initial slash
           WORKERFS.createNode(ensureParent(name), base(name), WORKERFS.FILE_MODE, 0, pack['blob'].slice(file.start, file.end));
         });
       });
       return root;
     },
-    createNode: function (parent, name, mode, dev, contents, mtime) {
+    createNode(parent, name, mode, dev, contents, mtime) {
       var node = FS.createNode(parent, name, mode);
       node.mode = mode;
       node.node_ops = WORKERFS.node_ops;
       node.stream_ops = WORKERFS.stream_ops;
-      node.timestamp = (mtime || new Date).getTime();
+      node.atime = node.mtime = node.ctime = (mtime || new Date).getTime();
       assert(WORKERFS.FILE_MODE !== WORKERFS.DIR_MODE);
       if (mode === WORKERFS.FILE_MODE) {
         node.size = contents.size;
@@ -74,7 +72,7 @@ mergeInto(LibraryManager.library, {
       return node;
     },
     node_ops: {
-      getattr: function(node) {
+      getattr(node) {
         return {
           dev: 1,
           ino: node.id,
@@ -82,80 +80,77 @@ mergeInto(LibraryManager.library, {
           nlink: 1,
           uid: 0,
           gid: 0,
-          rdev: undefined,
+          rdev: 0,
           size: node.size,
-          atime: new Date(node.timestamp),
-          mtime: new Date(node.timestamp),
-          ctime: new Date(node.timestamp),
+          atime: new Date(node.atime),
+          mtime: new Date(node.mtime),
+          ctime: new Date(node.ctime),
           blksize: 4096,
           blocks: Math.ceil(node.size / 4096),
         };
       },
-      setattr: function(node, attr) {
-        if (attr.mode !== undefined) {
-          node.mode = attr.mode;
-        }
-        if (attr.timestamp !== undefined) {
-          node.timestamp = attr.timestamp;
-        }
-      },
-      lookup: function(parent, name) {
-        throw new FS.ErrnoError({{{ cDefine('ENOENT') }}});
-      },
-      mknod: function (parent, name, mode, dev) {
-        throw new FS.ErrnoError({{{ cDefine('EPERM') }}});
-      },
-      rename: function (oldNode, newDir, newName) {
-        throw new FS.ErrnoError({{{ cDefine('EPERM') }}});
-      },
-      unlink: function(parent, name) {
-        throw new FS.ErrnoError({{{ cDefine('EPERM') }}});
-      },
-      rmdir: function(parent, name) {
-        throw new FS.ErrnoError({{{ cDefine('EPERM') }}});
-      },
-      readdir: function(node) {
-        var entries = ['.', '..'];
-        for (var key in node.contents) {
-          if (!node.contents.hasOwnProperty(key)) {
-            continue;
+      setattr(node, attr) {
+        for (const key of ["mode", "atime", "mtime", "ctime"]) {
+          if (attr[key] != null) {
+            node[key] = attr[key];
           }
+        }
+      },
+      lookup(parent, name) {
+        throw new FS.ErrnoError({{{ cDefs.ENOENT }}});
+      },
+      mknod(parent, name, mode, dev) {
+        throw new FS.ErrnoError({{{ cDefs.EPERM }}});
+      },
+      rename(oldNode, newDir, newName) {
+        throw new FS.ErrnoError({{{ cDefs.EPERM }}});
+      },
+      unlink(parent, name) {
+        throw new FS.ErrnoError({{{ cDefs.EPERM }}});
+      },
+      rmdir(parent, name) {
+        throw new FS.ErrnoError({{{ cDefs.EPERM }}});
+      },
+      readdir(node) {
+        var entries = ['.', '..'];
+        for (var key of Object.keys(node.contents)) {
           entries.push(key);
         }
         return entries;
       },
-      symlink: function(parent, newName, oldPath) {
-        throw new FS.ErrnoError({{{ cDefine('EPERM') }}});
-      },
-      readlink: function(node) {
-        throw new FS.ErrnoError({{{ cDefine('EPERM') }}});
+      symlink(parent, newName, oldPath) {
+        throw new FS.ErrnoError({{{ cDefs.EPERM }}});
       },
     },
     stream_ops: {
-      read: function (stream, buffer, offset, length, position) {
+      read(stream, buffer, offset, length, position) {
         if (position >= stream.node.size) return 0;
         var chunk = stream.node.contents.slice(position, position + length);
         var ab = WORKERFS.reader.readAsArrayBuffer(chunk);
         buffer.set(new Uint8Array(ab), offset);
         return chunk.size;
       },
-      write: function (stream, buffer, offset, length, position) {
-        throw new FS.ErrnoError({{{ cDefine('EIO') }}});
+      write(stream, buffer, offset, length, position) {
+        throw new FS.ErrnoError({{{ cDefs.EIO }}});
       },
-      llseek: function (stream, offset, whence) {
+      llseek(stream, offset, whence) {
         var position = offset;
-        if (whence === {{{ cDefine('SEEK_CUR') }}}) {
+        if (whence === {{{ cDefs.SEEK_CUR }}}) {
           position += stream.position;
-        } else if (whence === {{{ cDefine('SEEK_END') }}}) {
+        } else if (whence === {{{ cDefs.SEEK_END }}}) {
           if (FS.isFile(stream.node.mode)) {
             position += stream.node.size;
           }
         }
         if (position < 0) {
-          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
+          throw new FS.ErrnoError({{{ cDefs.EINVAL }}});
         }
         return position;
       },
     },
   },
 });
+
+if (WASMFS) {
+  error("using -lworkerfs is not currently supported in WasmFS.");
+}

@@ -16,12 +16,16 @@
 
 .globaltype __stack_pointer, PTR
 
+.section .globals,"",@
+
 # TODO(sbc): It would be nice if these we initialized directly
 # using PTR.const rather than using the `emscripten_stack_init`
 .globaltype __stack_end, PTR
 __stack_end:
 .globaltype __stack_base, PTR
 __stack_base:
+
+.section .text,"",@
 
 emscripten_stack_get_base:
   .functype emscripten_stack_get_base () -> (PTR)
@@ -39,19 +43,20 @@ emscripten_stack_init:
   # emscripten_stack_get_base, or emscripten_stack_get_free are called
   .functype emscripten_stack_init () -> ()
 
-  # The heap base is where the stack grown down from.
+  # What llvm calls __stack_high is the high address from where is grows
+  # downwards.  We call this the stack base here in emscripten.
 #ifdef __PIC__
-  global.get __heap_base@GOT
+  global.get __stack_high@GOT
 #else
-  PTR.const __heap_base
+  PTR.const __stack_high
 #endif
   global.set __stack_base
 
-  # The end of stack data is the limit of the stack growth
+  # What llvm calls __stack_low is that end of the stack
 #ifdef __PIC__
-  global.get __data_end@GOT
+  global.get __stack_low@GOT
 #else
-  PTR.const __data_end
+  PTR.const __stack_low
 #endif
   # Align up to 16 bytes
   PTR.const 0xf
@@ -76,35 +81,6 @@ emscripten_stack_get_free:
   global.get __stack_end
   PTR.sub
   end_function
-
-#ifdef __EMSCRIPTEN_WASM_WORKERS__
-# TODO: Relocate the following to its own file wasm_worker.S, but need to figure out how to reference
-# __stack_base and __stack_end globals from a separate file as externs in order for that to work.
-.globl emscripten_wasm_worker_initialize
-emscripten_wasm_worker_initialize:
-  .functype emscripten_wasm_worker_initialize (PTR, i32, PTR) -> ()
-
-  local.get 0
-  global.set __stack_end
-
-  local.get 0
-  local.get 1
-#ifdef __wasm64__
-  i64.extend_i32_u
-#endif
-  PTR.add
-  local.tee 0
-  global.set __stack_base
-
-  local.get 0
-  global.set __stack_pointer
-
-  local.get 2
-  .functype __wasm_init_tls (PTR) -> ()
-  call __wasm_init_tls
-
-  end_function
-#endif
 
 # Add emscripten_stack_init to static ctors
 .section .init_array.1,"",@

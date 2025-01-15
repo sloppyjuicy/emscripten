@@ -7,7 +7,7 @@
 '''
 This operates on a JS+wasm emitted from compiling with
 
-  -s MAYBE_WASM2JS
+  -sMAYBE_WASM2JS
 
 and it does wasm2js on it. That is, it converts the wasm to JS, and lets
 you run it. You can also pick between the wasm and JS at runtime.
@@ -31,7 +31,7 @@ import sys
 
 __scriptdir__ = os.path.dirname(os.path.abspath(__file__))
 __rootdir__ = os.path.dirname(__scriptdir__)
-sys.path.append(__rootdir__)
+sys.path.insert(0, __rootdir__)
 
 from tools import shared, building
 
@@ -41,20 +41,12 @@ opts = sys.argv[3:]
 
 # main
 
-cmd = [os.path.join(building.get_binaryen_bin(), 'wasm2js'), '--emscripten', wasm_file]
+cmd = [os.path.join(building.get_binaryen_bin(), 'wasm2js'), '--emscripten', '-all', wasm_file]
 cmd += opts
 js = shared.run_process(cmd, stdout=subprocess.PIPE).stdout
 # assign the instantiate function to where it will be used
-# TODO(sbc): From the seond patterns here that represents the output of
-# older versions of wasm2js
-if 'function instantiate(asmLibraryArg)' in js:
-  js = js.replace('function instantiate(asmLibraryArg) {',
-                  "Module['__wasm2jsInstantiate__'] = function(asmLibraryArg) {")
-elif 'function instantiate(asmLibraryArg, wasmMemory)' in js:
-  js = js.replace('function instantiate(asmLibraryArg, wasmMemory) {',
-                  "Module['__wasm2jsInstantiate__'] = function(asmLibraryArg, wasmMemory) {")
-else:
-  assert False, 'failed to find expected signature in wasm2js output'
+js = shared.do_replace(js, 'function instantiate(info) {',
+                       "Module['__wasm2jsInstantiate__'] = function(info) {")
 
 # create the combined js to run in wasm2js mode
 print('var Module = { doWasm2JS: true };\n')

@@ -17,7 +17,7 @@ Special commands:
   - xml:    generate XML coverage report in ./coverage.xml
 
 Otherwise, you can run any python script or Emscripten command, for example:
-  - emcoverage.py ./tests/runner.py core0
+  - emcoverage.py ./test/runner.py core0
   - emcoverage.py emcc file1.c file2.c
 
 Running a command under emcoverage.py will collect the code coverage
@@ -36,19 +36,19 @@ import sys
 import uuid
 from glob import glob
 
-import coverage.cmdline
+import coverage.cmdline # type: ignore
+import contextlib
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def main():
-  # We hack sys.executable to point to this file, which is executable via #! line.
-  # Emscripten uses sys.executable to populate shared.PYTHON, which is used to
-  # invoke all python subprocesses. By making this script run all python subprocesses,
-  # all of them will execute under the watchful eye of emcoverage.py, and resulting
-  # in their code coverage being tracked.
-  sys.executable = os.path.abspath(__file__)
-  os.environ['EMSDK_PYTHON'] = sys.executable
+  # We set EMSDK_PYTHON to point to this file, which is executable via #! line.
+  # Emscripten uses EMSDK_PYTHON to invoke all python subprocesses. By making this
+  # script run all python subprocesses, all of them will execute under the
+  # watchful eye of emcoverage.py, and resulting in their code coverage being
+  # tracked.
+  os.environ['EMSDK_PYTHON'] = os.path.abspath(__file__)
 
   store = os.path.join(SCRIPT_DIR, 'coverage')
 
@@ -63,10 +63,8 @@ def main():
   if sys.argv[1] in ('html', 'report', 'xml'):
     old_argv = sys.argv
     sys.argv = ['coverage', 'combine'] + glob(os.path.join(store, '*'))
-    try:
+    with contextlib.suppress(SystemExit):
       coverage.cmdline.main()
-    except SystemExit:
-      pass
     sys.argv = old_argv + ['-i']
     return coverage.cmdline.main()
 

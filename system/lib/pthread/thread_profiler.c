@@ -10,9 +10,7 @@
 #include <stdbool.h>
 #include "pthread_impl.h"
 #include <emscripten/threading.h>
-// Included for emscripten_builtin_free / emscripten_builtin_malloc
-// TODO(sbc): Should these be in their own header to avoid emmalloc here?
-#include <emscripten/emmalloc.h>
+#include <emscripten/heap.h>
 
 static bool enabled = false;
 
@@ -36,6 +34,7 @@ static void set_status_conditional(int expectedStatus, int newStatus) {
     return;
   }
   pthread_t thread = pthread_self();
+  if (!thread) return; // AudioWorklets do not have a pthread block, but if user calls emscripten_futex_wait() in an AudioWorklet, it will call here via emscripten_set_current_thread_status().
   int prevStatus = thread->profilerBlock->threadStatus;
 
   if (prevStatus != newStatus && (prevStatus == expectedStatus || expectedStatus == -1)) {

@@ -4,29 +4,33 @@
  * SPDX-License-Identifier: MIT
  */
 
-mergeInto(LibraryManager.library, {
+addToLibrary({
+#if WASMFS
+  $NODEFS__deps: ['$stringToUTF8OnStack', 'wasmfs_create_node_backend'],
+  $NODEFS: {
+    createBackend(opts) {
+      return _wasmfs_create_node_backend(stringToUTF8OnStack(opts.root));
+    }
+  }
+#else
   $NODEFS__deps: ['$FS', '$PATH', '$ERRNO_CODES', '$mmapAlloc'],
-  $NODEFS__postset: 'if (ENVIRONMENT_IS_NODE) { requireNodeFS(); NODEFS.staticInit(); }',
+  $NODEFS__postset: 'if (ENVIRONMENT_IS_NODE) { NODEFS.staticInit(); }',
   $NODEFS: {
     isWindows: false,
-    staticInit: () => {
+    staticInit() {
       NODEFS.isWindows = !!process.platform.match(/^win/);
-      var flags = process["binding"]("constants");
-      // Node.js 4 compatibility: it has no namespaces for constants
-      if (flags["fs"]) {
-        flags = flags["fs"];
-      }
+      var flags = process.binding("constants")["fs"];
       NODEFS.flagsForNodeMap = {
-        "{{{ cDefine('O_APPEND') }}}": flags["O_APPEND"],
-        "{{{ cDefine('O_CREAT') }}}": flags["O_CREAT"],
-        "{{{ cDefine('O_EXCL') }}}": flags["O_EXCL"],
-        "{{{ cDefine('O_NOCTTY') }}}": flags["O_NOCTTY"],
-        "{{{ cDefine('O_RDONLY') }}}": flags["O_RDONLY"],
-        "{{{ cDefine('O_RDWR') }}}": flags["O_RDWR"],
-        "{{{ cDefine('O_DSYNC') }}}": flags["O_SYNC"],
-        "{{{ cDefine('O_TRUNC') }}}": flags["O_TRUNC"],
-        "{{{ cDefine('O_WRONLY') }}}": flags["O_WRONLY"],
-        "{{{ cDefine('O_NOFOLLOW') }}}": flags["O_NOFOLLOW"],
+        "{{{ cDefs.O_APPEND }}}": flags["O_APPEND"],
+        "{{{ cDefs.O_CREAT }}}": flags["O_CREAT"],
+        "{{{ cDefs.O_EXCL }}}": flags["O_EXCL"],
+        "{{{ cDefs.O_NOCTTY }}}": flags["O_NOCTTY"],
+        "{{{ cDefs.O_RDONLY }}}": flags["O_RDONLY"],
+        "{{{ cDefs.O_RDWR }}}": flags["O_RDWR"],
+        "{{{ cDefs.O_DSYNC }}}": flags["O_SYNC"],
+        "{{{ cDefs.O_TRUNC }}}": flags["O_TRUNC"],
+        "{{{ cDefs.O_WRONLY }}}": flags["O_WRONLY"],
+        "{{{ cDefs.O_NOFOLLOW }}}": flags["O_NOFOLLOW"],
       };
 #if ASSERTIONS
       // The 0 define must match on both sides, as otherwise we would not
@@ -34,44 +38,51 @@ mergeInto(LibraryManager.library, {
       assert(NODEFS.flagsForNodeMap["0"] === 0);
 #endif
     },
-    convertNodeCode: (e) => {
+    convertNodeCode(e) {
       var code = e.code;
 #if ASSERTIONS
-      assert(code in ERRNO_CODES, 'unexpected node error code: ' + code + ' (' + e + ')');
+      assert(code in ERRNO_CODES, `unexpected node error code: ${code} (${e})`);
 #endif
       return ERRNO_CODES[code];
     },
-    mount: (mount) => {
+    tryFSOperation(f) {
+      try {
+        return f();
+      } catch (e) {
+        if (!e.code) throw e;
+        // node under windows can return code 'UNKNOWN' here:
+        // https://github.com/emscripten-core/emscripten/issues/15468
+        if (e.code === 'UNKNOWN') throw new FS.ErrnoError({{{ cDefs.EINVAL }}});
+        throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
+      }
+    },
+    mount(mount) {
 #if ASSERTIONS
       assert(ENVIRONMENT_IS_NODE);
 #endif
       return NODEFS.createNode(null, '/', NODEFS.getMode(mount.opts.root), 0);
     },
-    createNode: (parent, name, mode, dev) => {
+    createNode(parent, name, mode, dev) {
       if (!FS.isDir(mode) && !FS.isFile(mode) && !FS.isLink(mode)) {
-        throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
+        throw new FS.ErrnoError({{{ cDefs.EINVAL }}});
       }
       var node = FS.createNode(parent, name, mode);
       node.node_ops = NODEFS.node_ops;
       node.stream_ops = NODEFS.stream_ops;
       return node;
     },
-    getMode: (path) => {
-      var stat;
-      try {
-        stat = fs.lstatSync(path);
+    getMode(path) {
+      return NODEFS.tryFSOperation(() => {
+        var mode = fs.lstatSync(path).mode;
         if (NODEFS.isWindows) {
-          // Node.js on Windows never represents permission bit 'x', so
-          // propagate read bits to execute bits
-          stat.mode = stat.mode | ((stat.mode & 292) >> 2);
+          // Windows does not report the 'x' permission bit, so propagate read
+          // bits to execute bits.
+          mode |= (mode & {{{ cDefs.S_IRUGO }}}) >> 2;
         }
-      } catch (e) {
-        if (!e.code) throw e;
-        throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-      }
-      return stat.mode;
+        return mode;
+      });
     },
-    realPath: (node) => {
+    realPath(node) {
       var parts = [];
       while (node.parent !== node) {
         parts.push(node.name);
@@ -79,16 +90,16 @@ mergeInto(LibraryManager.library, {
       }
       parts.push(node.mount.opts.root);
       parts.reverse();
-      return PATH.join.apply(null, parts);
+      return PATH.join(...parts);
     },
     // This maps the integer permission modes from http://linux.die.net/man/3/open
     // to node.js-specific file open permission strings at http://nodejs.org/api/fs.html#fs_fs_open_path_flags_mode_callback
-    flagsForNode: (flags) => {
-      flags &= ~{{{ cDefine('O_PATH') }}}; // Ignore this flag from musl, otherwise node.js fails to open the file.
-      flags &= ~{{{ cDefine('O_NONBLOCK') }}}; // Ignore this flag from musl, otherwise node.js fails to open the file.
-      flags &= ~{{{ cDefine('O_LARGEFILE') }}}; // Ignore this flag from musl, otherwise node.js fails to open the file.
-      flags &= ~{{{ cDefine('O_CLOEXEC') }}}; // Some applications may pass it; it makes no sense for a single process.
-      flags &= ~{{{ cDefine('O_DIRECTORY') }}}; // Node.js doesn't need this passed in, it errors.
+    flagsForNode(flags) {
+      flags &= ~{{{ cDefs.O_PATH }}}; // Ignore this flag from musl, otherwise node.js fails to open the file.
+      flags &= ~{{{ cDefs.O_NONBLOCK }}}; // Ignore this flag from musl, otherwise node.js fails to open the file.
+      flags &= ~{{{ cDefs.O_LARGEFILE }}}; // Ignore this flag from musl, otherwise node.js fails to open the file.
+      flags &= ~{{{ cDefs.O_CLOEXEC }}}; // Some applications may pass it; it makes no sense for a single process.
+      flags &= ~{{{ cDefs.O_DIRECTORY }}}; // Node.js doesn't need this passed in, it errors.
       var newFlags = 0;
       for (var k in NODEFS.flagsForNodeMap) {
         if (flags & k) {
@@ -96,33 +107,25 @@ mergeInto(LibraryManager.library, {
           flags ^= k;
         }
       }
-      if (!flags) {
-        return newFlags;
-      } else {
-        throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
+      if (flags) {
+        throw new FS.ErrnoError({{{ cDefs.EINVAL }}});
       }
+      return newFlags;
     },
+
     node_ops: {
-      getattr: (node) => {
+      getattr(node) {
         var path = NODEFS.realPath(node);
         var stat;
-        try {
-          stat = fs.lstatSync(path);
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
-        // node.js v0.10.20 doesn't report blksize and blocks on Windows. Fake them with default blksize of 4096.
-        // See http://support.microsoft.com/kb/140365
-        if (NODEFS.isWindows && !stat.blksize) {
-          stat.blksize = 4096;
-        }
-        if (NODEFS.isWindows && !stat.blocks) {
-          stat.blocks = (stat.size+stat.blksize-1)/stat.blksize|0;
+        NODEFS.tryFSOperation(() => stat = fs.lstatSync(path));
+        if (NODEFS.isWindows) {
+          // Windows does not report the 'x' permission bit, so propagate read
+          // bits to execute bits.
+          stat.mode |= (stat.mode & {{{ cDefs.S_IRUGO }}}) >> 2;
         }
         return {
           dev: stat.dev,
-          ino: stat.ino,
+          ino: node.id,
           mode: stat.mode,
           nlink: stat.nlink,
           uid: stat.uid,
@@ -136,194 +139,159 @@ mergeInto(LibraryManager.library, {
           blocks: stat.blocks
         };
       },
-      setattr: (node, attr) => {
+      setattr(node, attr) {
         var path = NODEFS.realPath(node);
-        try {
+        NODEFS.tryFSOperation(() => {
           if (attr.mode !== undefined) {
-            fs.chmodSync(path, attr.mode);
+            if (attr.dontFollow) {
+              throw new FS.ErrnoError({{{ cDefs.ENOSYS }}});
+            }
+            var mode = attr.mode;
+            if (NODEFS.isWindows) {
+              // Windows only supports S_IREAD / S_IWRITE (S_IRUSR / S_IWUSR)
+              // https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/chmod-wchmod
+              mode &= {{{ cDefs.S_IRUSR | cDefs.S_IWUSR }}};
+            }
+            fs.chmodSync(path, mode);
             // update the common node structure mode as well
             node.mode = attr.mode;
           }
-          if (attr.timestamp !== undefined) {
-            var date = new Date(attr.timestamp);
-            fs.utimesSync(path, date, date);
+          if (typeof (attr.atime ?? attr.mtime) === "number") {
+            // Unfortunately, we have to stat the current value if we don't want
+            // to change it. On top of that, since the times don't round trip
+            // this will only keep the value nearly unchanged not exactly
+            // unchanged. See:
+            // https://github.com/nodejs/node/issues/56492
+            var stat = () => fs.lstatSync(NODEFS.realPath(node));
+            var atime = new Date(attr.atime ?? stat().atime);
+            var mtime = new Date(attr.mtime ?? stat().mtime);
+            fs.utimesSync(path, atime, mtime);
           }
           if (attr.size !== undefined) {
             fs.truncateSync(path, attr.size);
           }
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        });
       },
-      lookup: (parent, name) => {
+      lookup(parent, name) {
         var path = PATH.join2(NODEFS.realPath(parent), name);
         var mode = NODEFS.getMode(path);
         return NODEFS.createNode(parent, name, mode);
       },
-      mknod: (parent, name, mode, dev) => {
+      mknod(parent, name, mode, dev) {
         var node = NODEFS.createNode(parent, name, mode, dev);
         // create the backing node for this in the fs root as well
         var path = NODEFS.realPath(node);
-        try {
+        NODEFS.tryFSOperation(() => {
           if (FS.isDir(node.mode)) {
             fs.mkdirSync(path, node.mode);
           } else {
             fs.writeFileSync(path, '', { mode: node.mode });
           }
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        });
         return node;
       },
-      rename: (oldNode, newDir, newName) => {
+      rename(oldNode, newDir, newName) {
         var oldPath = NODEFS.realPath(oldNode);
         var newPath = PATH.join2(NODEFS.realPath(newDir), newName);
         try {
-          fs.renameSync(oldPath, newPath);
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+          FS.unlink(newPath);
+        } catch(e) {}
+        NODEFS.tryFSOperation(() => fs.renameSync(oldPath, newPath));
         oldNode.name = newName;
       },
-      unlink: (parent, name) => {
+      unlink(parent, name) {
         var path = PATH.join2(NODEFS.realPath(parent), name);
-        try {
-          fs.unlinkSync(path);
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        NODEFS.tryFSOperation(() => fs.unlinkSync(path));
       },
-      rmdir: (parent, name) => {
+      rmdir(parent, name) {
         var path = PATH.join2(NODEFS.realPath(parent), name);
-        try {
-          fs.rmdirSync(path);
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        NODEFS.tryFSOperation(() => fs.rmdirSync(path));
       },
-      readdir: (node) => {
+      readdir(node) {
         var path = NODEFS.realPath(node);
-        try {
-          return fs.readdirSync(path);
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        return NODEFS.tryFSOperation(() => fs.readdirSync(path));
       },
-      symlink: (parent, newName, oldPath) => {
+      symlink(parent, newName, oldPath) {
         var newPath = PATH.join2(NODEFS.realPath(parent), newName);
-        try {
-          fs.symlinkSync(oldPath, newPath);
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        NODEFS.tryFSOperation(() => fs.symlinkSync(oldPath, newPath));
       },
-      readlink: (node) => {
+      readlink(node) {
         var path = NODEFS.realPath(node);
-        try {
-          path = fs.readlinkSync(path);
-          path = nodePath.relative(nodePath.resolve(node.mount.opts.root), path);
-          return path;
-        } catch (e) {
-          if (!e.code) throw e;
-          // node under windows can return code 'UNKNOWN' here:
-          // https://github.com/emscripten-core/emscripten/issues/15468
-          if (e.code === 'UNKNOWN') throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        return NODEFS.tryFSOperation(() => fs.readlinkSync(path));
       },
+      statfs(path) {
+        var stats = NODEFS.tryFSOperation(() => fs.statfsSync(path));
+        // Node.js doesn't provide frsize (fragment size). Set it to bsize (block size)
+        // as they're often the same in many file systems. May not be accurate for all.
+        stats.frsize = stats.bsize;
+        return stats;
+      }
     },
     stream_ops: {
-      open: (stream) => {
+      open(stream) {
         var path = NODEFS.realPath(stream.node);
-        try {
+        NODEFS.tryFSOperation(() => {
           if (FS.isFile(stream.node.mode)) {
+            stream.shared.refcount = 1;
             stream.nfd = fs.openSync(path, NODEFS.flagsForNode(stream.flags));
           }
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        });
       },
-      close: (stream) => {
-        try {
-          if (FS.isFile(stream.node.mode) && stream.nfd) {
+      close(stream) {
+        NODEFS.tryFSOperation(() => {
+          if (FS.isFile(stream.node.mode) && stream.nfd && --stream.shared.refcount === 0) {
             fs.closeSync(stream.nfd);
           }
-        } catch (e) {
-          if (!e.code) throw e;
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+        });
       },
-      read: (stream, buffer, offset, length, position) => {
-        // Node.js < 6 compatibility: node errors on 0 length reads
-        if (length === 0) return 0;
-        try {
-          return fs.readSync(stream.nfd, Buffer.from(buffer.buffer), offset, length, position);
-        } catch (e) {
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+      dup(stream) {
+        stream.shared.refcount++;
       },
-      write: (stream, buffer, offset, length, position) => {
-        try {
-          return fs.writeSync(stream.nfd, Buffer.from(buffer.buffer), offset, length, position);
-        } catch (e) {
-          throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-        }
+      read(stream, buffer, offset, length, position) {
+        return NODEFS.tryFSOperation(() =>
+          fs.readSync(stream.nfd, new Int8Array(buffer.buffer, offset, length), 0, length, position)
+        );
       },
-      llseek: (stream, offset, whence) => {
+      write(stream, buffer, offset, length, position) {
+        return NODEFS.tryFSOperation(() =>
+          fs.writeSync(stream.nfd, new Int8Array(buffer.buffer, offset, length), 0, length, position)
+        );
+      },
+      llseek(stream, offset, whence) {
         var position = offset;
-        if (whence === {{{ cDefine('SEEK_CUR') }}}) {
+        if (whence === {{{ cDefs.SEEK_CUR }}}) {
           position += stream.position;
-        } else if (whence === {{{ cDefine('SEEK_END') }}}) {
+        } else if (whence === {{{ cDefs.SEEK_END }}}) {
           if (FS.isFile(stream.node.mode)) {
-            try {
+            NODEFS.tryFSOperation(() => {
               var stat = fs.fstatSync(stream.nfd);
               position += stat.size;
-            } catch (e) {
-              throw new FS.ErrnoError(NODEFS.convertNodeCode(e));
-            }
+            });
           }
         }
 
         if (position < 0) {
-          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
+          throw new FS.ErrnoError({{{ cDefs.EINVAL }}});
         }
 
         return position;
       },
-      mmap: (stream, address, length, position, prot, flags) => {
-        if (address !== 0) {
-          // We don't currently support location hints for the address of the mapping
-          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
-        }
+      mmap(stream, length, position, prot, flags) {
         if (!FS.isFile(stream.node.mode)) {
-          throw new FS.ErrnoError({{{ cDefine('ENODEV') }}});
+          throw new FS.ErrnoError({{{ cDefs.ENODEV }}});
         }
 
         var ptr = mmapAlloc(length);
 
         NODEFS.stream_ops.read(stream, HEAP8, ptr, length, position);
-        return { ptr: ptr, allocated: true };
+        return { ptr, allocated: true };
       },
-      msync: (stream, buffer, offset, length, mmapFlags) => {
-        if (!FS.isFile(stream.node.mode)) {
-          throw new FS.ErrnoError({{{ cDefine('ENODEV') }}});
-        }
-        if (mmapFlags & {{{ cDefine('MAP_PRIVATE') }}}) {
-          // MAP_PRIVATE calls need not to be synced back to underlying fs
-          return 0;
-        }
-
-        var bytesWritten = NODEFS.stream_ops.write(stream, buffer, 0, length, offset, false);
+      msync(stream, buffer, offset, length, mmapFlags) {
+        NODEFS.stream_ops.write(stream, buffer, 0, length, offset, false);
+        // should we check if bytesWritten and length are the same?
         return 0;
       }
     }
   }
+#endif
 });

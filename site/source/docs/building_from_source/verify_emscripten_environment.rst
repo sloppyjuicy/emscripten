@@ -21,14 +21,15 @@ Open a terminal in the directory in which you installed Emscripten (on Windows o
 
 .. note:: On Windows, invoke the tool with **emcc** instead of **./emcc**.
 
-For example, the following output reports an installation where Java is missing:
+For example, the following output reports that the correct version of clang
+could not be found:
 
 .. code-block:: none
   :emphasize-lines: 3
 
   emcc (Emscripten GCC-like replacement + linker emulating GNU ld) 1.21.0
   shared:INFO: (Emscripten: Running sanity checks)
-  shared:WARNING: java does not seem to exist, required for closure compiler. -O2 and above will fail. You need to define JAVA in .emscripten
+  emcc: warning: LLVM version for clang executable "/usr/bin/clang" appears incorrect (seeing "16.0", expected "18") [-Wversion-check]
 
 At this point you need to :ref:`Install and activate <fixing-missing-components-emcc>` any missing components. When everything is set up properly, ``emcc ---check`` should give no warnings, and if you just enter ``emcc`` (without any input files), it will give an error ::
 
@@ -43,7 +44,7 @@ The next test is to actually build some code! On the command prompt navigate to 
 ::
 
   cd emscripten/<version of emscripten you installed>
-  ./emcc tests/hello_world.cpp
+  ./emcc test/hello_world.cpp
 
 This command should complete without warnings and you should find the newly-compiled JavaScript file (**a.out.js**) in the current directory.
 

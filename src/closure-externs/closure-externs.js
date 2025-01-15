@@ -11,8 +11,18 @@
  * The closure_compiler() method in tools/shared.py refers to this file when calling closure.
  */
 
-// Special placeholder for `import.meta`.
+// Special placeholder for `import.meta` and `await import`.
 var EMSCRIPTEN$IMPORT$META;
+var EMSCRIPTEN$AWAIT$IMPORT;
+
+// Don't minify createRequire
+var createRequire;
+
+// Don't minify startWorker which we use to start workers once the runtime is ready.
+/**
+ * @param {Object} Module
+ */
+var startWorker = function(Module) {};
 
 // Closure externs used by library_sockfs.js
 
@@ -75,10 +85,19 @@ var WebAssembly = {};
  */
 WebAssembly.Global = function(globalDescriptor, value) {};
 /**
- * @constructor
- * @param {Object} tagDescriptor
+ * @param {!WebAssembly.Tag} tag
+ * @param {number} index
  */
-WebAssembly.Tag = function(tagDescriptor) {};
+WebAssembly.Exception.getArg = function(tag, index) {};
+/**
+ * @param {!WebAssembly.Tag} tag
+ */
+WebAssembly.Exception.is = function(tag) {};
+/**
+ * @type {string}
+ */
+WebAssembly.Exception.stack;
+
 /**
  * Note: Closure compiler does not support function overloading, omit this overload for now.
  * {function(!WebAssembly.Module, Object=):!Promise<!WebAssembly.Instance>}
@@ -93,6 +112,41 @@ WebAssembly.Memory.prototype.buffer;
  * @type {number}
  */
 WebAssembly.Table.prototype.length;
+/**
+ * @param {!Function} func
+ * @returns {Function}
+ */
+WebAssembly.promising = function(func) {};
+/**
+ * @constructor
+ * @param {!Function} func
+ */
+WebAssembly.Suspending = function(func) {};
+
+/**
+ * @record
+ */
+function FunctionType() {}
+/**
+ * @type {Array<string>}
+ */
+FunctionType.prototype.parameters;
+/**
+ * @type {Array<string>}
+ */
+FunctionType.prototype.results;
+
+/**
+ * @constructor
+ * @param {!FunctionType} type
+ * @param {!Function} func
+ */
+WebAssembly.Function = function(type, func) {};
+/**
+ * @param {Function} func
+ * @return {FunctionType}
+ */
+WebAssembly.Function.type = function(func) {};
 
 /**
  * @suppress {undefinedVars}
@@ -102,10 +156,6 @@ var wakaUnknownAfter;
  * @suppress {undefinedVars}
  */
 var wakaUnknownBefore;
-/**
- * @suppress {undefinedVars}
- */
-var MozBlobBuilder;
 
 // Module loaders externs, for AMD etc.
 
@@ -143,21 +193,6 @@ var removeEventListener = function (type, listener) {};
  */
 var close;
 
-// Fetch.js/Fetch Worker
-
-/**
- * @suppress {undefinedVars}
- */
-var ENVIRONMENT_IS_FETCH_WORKER;
-
-// Due to the way MODULARIZE works, Closure is run on generated code that does not define _scriptDir,
-// but only after MODULARIZE has finished, _scriptDir is injected to the generated code.
-// Therefore it cannot be minified.
-/**
- * @suppress {duplicate, undefinedVars}
- */
-var _scriptDir;
-
 // Closure run on asm.js uses a hack to execute only on shell code, declare externs needed for it.
 /**
  * @suppress {undefinedVars}
@@ -183,14 +218,6 @@ var outerHeight;
 var event;
 var devicePixelRatio;
 
-// TODO: Use Closure's multifile support and/or migrate worker.js onmessage handler to inside the MODULARIZEd block
-// to be able to remove all the variables below:
-
-// Variables that are present in both output runtime .js file/JS lib files, and worker.js, so cannot be minified because
-// the names need to match:
-/** @suppress {duplicate} */
-var noExitRuntime;
-
 /*
  * AudioWorkletGlobalScope globals
  */
@@ -200,46 +227,37 @@ var currentTime;
 var sampleRate;
 
 /*
- * WebGPU globals
- */
-var GPUBufferUsage;
-var GPUColorWrite;
-var GPUMapMode;
-var GPUShaderStage;
-var GPUTextureUsage;
-var GPU;
-var GPUAdapter;
-var GPUBindGroup;
-var GPUBindGroupLayout;
-var GPUBuffer;
-var GPUCanvasContext;
-var GPUCommandBuffer;
-var GPUCommandEncoder;
-var GPUCompilationInfo;
-var GPUCompilationMessage;
-var GPUComputePassEncoder;
-var GPUComputePipeline;
-var GPUDevice;
-var GPUDeviceLostInfo;
-var GPUExternalTexture;
-var GPUOutOfMemoryError;
-var GPUPipelineLayout;
-var GPUQuerySet;
-var GPUQueue;
-var GPURenderBundle;
-var GPURenderBundleEncoder;
-var GPURenderPassEncoder;
-var GPURenderPipeline;
-var GPUSampler;
-var GPUShaderModule;
-var GPUSupportedFeatures;
-var GPUSupportedLimits;
-var GPUTexture;
-var GPUTextureView;
-var GPUUncapturedErrorEvent;
-var GPUValidationError;
-
-/*
  * Avoid closure minifying anything to "id". See #13965
  */
 var id;
+
+/**
+ * Used in MODULARIZE mode as the name of the incoming module argument.
+ * This is generated outside of the code we pass to closure so from closure's
+ * POV this is "extern".
+ */
+var moduleArg;
+
+/**
+ * Used in MODULARIZE mode.
+ * We need to access this after the code we pass to closure so from closure's
+ * POV this is "extern".
+ */
+var moduleRtn;
+
+/**
+ * This was removed from upstream closure compiler in
+ * https://github.com/google/closure-compiler/commit/f83322c1b.
+ * Perhaps we should remove it do?
+ *
+ * @param {MediaStreamConstraints} constraints A MediaStreamConstraints object.
+ * @param {function(!MediaStream)} successCallback
+ *     A NavigatorUserMediaSuccessCallback function.
+ * @param {function(!NavigatorUserMediaError)=} errorCallback A
+ *     NavigatorUserMediaErrorCallback function.
+ * @see http://dev.w3.org/2011/webrtc/editor/getusermedia.html
+ * @see https://www.w3.org/TR/mediacapture-streams/
+ * @return {undefined}
+ */
+Navigator.prototype.webkitGetUserMedia = function(
+    constraints, successCallback, errorCallback) {};

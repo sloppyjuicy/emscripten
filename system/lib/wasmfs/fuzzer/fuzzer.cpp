@@ -3,11 +3,10 @@
 // University of Illinois/NCSA Open Source License.  Both these licenses can be
 // found in the LICENSE file.
 
-// This file defines a fuzzer that will validate operations in the new file
-// system in a multi-threaded setting.
-// Current Status: Work in Progress. See
-// https://github.com/emscripten-core/emscripten/issues/15041.
+// This file defines a fuzzer that validates operations in a multi-threaded
+// setting.
 
+#include "parameters.h"
 #include "random.h"
 #include "support/command-line.h"
 #include "workload.h"
@@ -19,7 +18,6 @@
 #include <stdlib.h>
 #include <string>
 #include <unistd.h>
-#include "parameters.h"
 
 // Used to define the size of the bytes to seed the Random object.
 #define NUM_RAND_BYTES 4096
@@ -72,9 +70,7 @@ int main(int argc, const char* argv[]) {
               "-v",
               "Run with verbose logging",
               Options::Arguments::Zero,
-              [&](Options*, const std::string& arg) {
-                VERBOSE = true;
-              });
+              [&](Options*, const std::string& arg) { VERBOSE = true; });
 
   options.parse(argc, argv);
 

@@ -26,7 +26,7 @@ def convert_line_endings_in_file(filename, from_eol, to_eol):
 
 
 def check_line_endings(filename, expect_only=None, print_errors=True, print_info=False):
-  """Detect inconsitent/invalid line endings.
+  """Detect inconsistent/invalid line endings.
 
   This function checks and prints out the detected line endings in the given
   file. If the file only contains either Windows \\r\\n line endings or Unix \\n
@@ -46,7 +46,7 @@ def check_line_endings(filename, expect_only=None, print_errors=True, print_info
     if print_errors:
       print("File '" + filename + "' contains BAD line endings of form \\r\\r\\n!", file=sys.stderr)
       bad_line = data[index - 50:index + 50].replace(b'\r', b'\\r').replace(b'\n', b'\\n')
-      print("Content around the location: '" + bad_line + "'", file=sys.stderr)
+      print("Content around the location: '" + bad_line.decode('utf-8') + "'", file=sys.stderr)
     return 1 # Bad line endings in file, return a non-zero process exit code.
 
   has_dos_line_endings = False

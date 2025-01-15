@@ -152,7 +152,7 @@ if EMPROFILE == 1:
 
     @staticmethod
     def escape_args(args):
-      return map(lambda arg: ToolchainProfiler.escape_string(arg), args)
+      return [ToolchainProfiler.escape_string(arg) for arg in args]
 
     @staticmethod
     def record_process_start(write_log_entry=True):
@@ -268,5 +268,6 @@ else:
     def profile_block(block_name):
       return Logger(block_name)
 
+    @staticmethod
     def profile():
       return Logger(None)

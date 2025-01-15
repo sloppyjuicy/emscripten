@@ -19,18 +19,53 @@ This article describes the main tools and settings provided by Emscripten for de
 
 .. _debugging-debug-information-g:
 
-Debug information
-=================
+Debugging in the browser
+========================
 
-:ref:`Emcc <emccdoc>` strips out most of the debug information from :ref:`optimized builds <Optimizing-Code>` by default. Optimisation levels :ref:`-O1 <emcc-O1>` and above remove LLVM debug information, and also disable runtime :ref:`ASSERTIONS <debugging-ASSERTIONS>` checks. From optimization level :ref:`-O2 <emcc-O2>` the code is minified by the :term:`Closure Compiler` and becomes virtually unreadable.
+:ref:`Emcc <emccdoc>` can output debug information in two formats, either as
+DWARF symbols or as source maps. Both allow you to view and debug the
+*C/C++ source code* in a browser's debugger. DWARF offers the most precise and
+detailed debugging experience and is supported as an experiment in Chrome 88
+with an `extension <https://goo.gle/wasm-debugging-extension>`. See
+`here <https://developer.chrome.com/blog/wasm-debugging-2020/>` for a detailed
+usage guide. Source maps are more widely supported in Firefox, Chrome, and
+Safari, but unlike DWARF they cannot be used to inspect variables, for example.
 
-The *emcc* :ref:`-g flag <emcc-g>` can be used to preserve debug information in the compiled output. By default, this option includes Clang / LLVM debug information in a DWARF format in the generated WebAssembly code and preserves white-space, function names and variable names in the generated JavaScript code.
+:ref:`Emcc <emccdoc>` strips out most of the debug information from
+:ref:`optimized builds <Optimizing-Code>` by default. DWARF can be produced with
+the *emcc* :ref:`-g flag <emcc-g>`, and source maps can be emitted with the
+:ref:`-gsource-map <emcc-gsource-map>` option. Be aware that optimisation levels
+:ref:`-O1 <emcc-O1>` and above increasingly remove LLVM debug information, and
+also disable runtime :ref:`ASSERTIONS <debugging-ASSERTIONS>` checks. Passing a
+``-g`` flag also affects the generated JavaScript code and preserves
+white-space, function names, and variable names,
 
-The flag can also be specified with an integer level: :ref:`-g0 <emcc-g0>`, :ref:`-g1 <emcc-g1>`, :ref:`-g2 <emcc-g2>`, and :ref:`-g3 <emcc-g3>` (default level when setting ``-g``). Each level builds on the last to provide progressively more debug information in the compiled output. See :ref:`Compiler debug information flags <emcc-gN>` for more details.
+.. tip:: Even for medium-sized projects, DWARF debug information can be of
+  substantial size and negatively impact the page performance, particularly
+  compiling and loading of the module. Debug information can also be emitted in
+  a file on the side instead with the
+  :ref:`-gseparate-dwarf <emcc-gseparate-dwarf>` option! The debug information
+  size also affects the linking time, because the debug information in all
+  object files needs to be linked as well. Passing the
+  :ref:`-gsplit-dwarf <emcc-gsplit-dwarf>` option can help here, which causes
+  clang to leave debug information scattered across object files. That debug
+  information needs to be linked into a DWARF package file (``.dwp``) using the
+  ``emdwp`` tool then, but that could happen in parallel to the linking of
+  the compiled output! When running it
+  after linking, it's as simple as ``emdwp -e foo.wasm -o foo.wasm.dwp``, or
+  ``emdwp -e foo.debug.wasm -o foo.debug.wasm.dwp`` when used together with
+  ``-gseparate-dwarf`` (the dwp file should have the same file name as the main
+  symbol file with an extra ``.dwp`` extension).
 
-The :ref:`-gsource-map <emcc-gsource-map>` option is similar to ``-g2`` but also generates source maps that allow you to view and debug the *C/C++ source code* in your browser's debugger. Source maps are not as powerful as DWARF which was mentioned earlier (they contain only source location info), but they are currently more widely supported.
+The ``-g`` flag can also be specified with an integer levels:
+:ref:`-g0 <emcc-g0>`, :ref:`-g1 <emcc-g1>`, :ref:`-g2 <emcc-g2>` (default with
+``-gsource-map``), and :ref:`-g3 <emcc-g3>` (default with ``-g``). Each level
+builds on the last to provide progressively more debug information in the
+compiled output.
 
-.. note:: Some optimizations may be disabled when used in conjunction with the debug flags. For example, if you compile with ``-O3 -g`` some of the normal ``-O3`` optimizations will be disabled in order to provide the requested debugging information, such as name minification.
+.. note:: Because Binaryen optimization degrades the quality of DWARF info further, ``-O1 -g`` will skip running the Binaryen optimizer (``wasm-opt``) entirely unless required by other options. You can also throw in ``-sERROR_ON_WASM_CHANGES_AFTER_LINK`` option if you want to ensure the debug info is preserved. See `Skipping Binaryen <https://developer.chrome.com/blog/faster-wasm-debugging/#skipping-binaryen>`_ for more details.
+
+.. note:: Some optimizations may be disabled when used in conjunction with the debug flags both in the Binaryen optimizer (even if it runs) and JavaScript optimizer. For example, if you compile with ``-O3 -g``, the Binaryen optimizer will skip some of the optimization passes that do not produce valid DWARF information, and also some of the normal JavaScript optimization will be disabled in order to better provide the requested debugging information.
 
 .. _debugging-EMCC_DEBUG:
 
@@ -42,11 +77,11 @@ The ``EMCC_DEBUG`` environment variable can be set to enable Emscripten's debug 
 .. code-block:: bash
 
   # Linux or macOS
-  EMCC_DEBUG=1 emcc tests/hello_world.cpp -o hello.html
+  EMCC_DEBUG=1 emcc test/hello_world.cpp -o hello.html
 
   # Windows
   set EMCC_DEBUG=1
-  emcc tests/hello_world.cpp -o hello.html
+  emcc test/hello_world.cpp -o hello.html
   set EMCC_DEBUG=0
 
 With ``EMCC_DEBUG=1`` set, :ref:`emcc <emccdoc>` emits debug output and generates intermediate files for the compiler's various stages. ``EMCC_DEBUG=2`` additionally generates intermediate files for each JavaScript optimizer pass.
@@ -65,11 +100,11 @@ The debug logs can be analysed to profile and review the changes that were made 
 Compiler settings
 ==================
 
-Emscripten has a number of compiler settings that can be useful for debugging. These are set using the :ref:`emcc -s <emcc-s-option-value>` option, and will override any optimization flags. For example:
+Emscripten has a number of compiler settings that can be useful for debugging. These are set using the :ref:`emcc -s<emcc-s-option-value>` option, and will override any optimization flags. For example:
 
 .. code-block:: bash
 
-  emcc -O1 -s ASSERTIONS=1 tests/hello_world
+  emcc -O1 -sASSERTIONS test/hello_world
 
 Some important settings are:
 
@@ -102,11 +137,6 @@ Some important settings are:
     performance. Default value is 1 if ``ASSERTIONS=1`` is set, and disabled
     otherwise.
 
-  -
-    .. _debugging-DEMANGLE_SUPPORT:
-
-    ``DEMANGLE_SUPPORT=1`` links in code to automatically demangle stack traces, that is, emit human-readable C++ function names instead of ``_ZN..`` ones.
-
 A number of other useful debug settings are defined in `src/settings.js <https://github.com/emscripten-core/emscripten/blob/main/src/settings.js>`_. For more information, search that file for the keywords "check" and "debug".
 
 .. _debugging-sanitizers:
@@ -131,7 +161,7 @@ Manual print debugging
 
 You can also manually instrument the source code with ``printf()`` statements, then compile and run the code to investigate issues. Note that ``printf()`` is line-buffered, make sure to add ``\n`` to see output in the console.
 
-If you have a good idea of the problem line you can add ``print(new Error().stack)`` to the JavaScript to get a stack trace at that point. Also available is :js:func:`stackTrace`, which emits a stack trace and also tries to demangle C++ function names if ``DEMANGLE_SUPPORT`` is enabled (if you don't want or need C++ demangling in a specific stack trace, you can call :js:func:`jsStackTrace`).
+If you have a good idea of the problem line you can add ``print(new Error().stack)`` to the JavaScript to get a stack trace at that point.
 
 Debug printouts can even execute arbitrary JavaScript. For example::
 
@@ -145,57 +175,21 @@ Debug printouts can even execute arbitrary JavaScript. For example::
   }
 
 
-Handling C++ exceptions from javascript
+Debugging with Chrome Devtools
+==============================
+
+Chrome devtools support source-level debugging on WebAssembly files with DWARF information. To use that, you need the Wasm debugging extension plugin here:
+https://goo.gle/wasm-debugging-extension
+
+See `Debugging WebAssembly with modern tools
+<https://developer.chrome.com/blog/wasm-debugging-2020/>`_ for the details.
+
+
+Handling C++ Exceptions from JavaScript
 =======================================
 
-C++ exceptions are thrown from WebAssembly using exception pointers, which means
-that try/catch/finally blocks in JavaScript will only receive a number, which
-represents a pointer into linear memory. In order to get the exception message,
-the user will need to create some WASM code which will extract the meaning from
-the exception. In the example code below we created a function that receives the
-address of a ``std::exception``, and by casting the pointer
-returns the ``what`` function call result.
+See :ref:`handling-c-exceptions-from-javascript`.
 
-.. code-block:: cpp
-
-  #include <bind.h>
-
-  std::string getExceptionMessage(intptr_t exceptionPtr) {
-    return std::string(reinterpret_cast<std::exception *>(exceptionPtr)->what());
-  }
-
-  EMSCRIPTEN_BINDINGS(Bindings) {
-    emscripten::function("getExceptionMessage", &getExceptionMessage);
-  };
-
-Once such a function has been created, exception handling code in javascript
-can call it when receiving an exception from WASM. Here the function is used
-in order to log the thrown exception.
-
-.. code-block:: javascript
-
-  try {
-    ... // some code that calls WebAssembly
-  } catch (exception) {
-    console.error(Module.getExceptionMessage(exception));
-  } finally {
-    ...
-  }
-
-It's important to notice that this example code will work only for thrown
-statically allocated exceptions. If your code throws other objects, such as
-strings or dynamically allocated exceptions, the handling code will need to
-take that into account. For example, if your code needs to handle both native
-C++ exceptions and JavaScript exceptions you could use the following code to
-distinguish between them:
-
-.. code-block:: javascript
-
-  function getExceptionMessage(exception) {
-    return typeof exception === 'number'
-      ? Module.getExceptionMessage(exception)
-      : exception;
-  }
 
 .. _debugging-emscripten-specific-issues:
 
@@ -233,8 +227,9 @@ There are several possible causes:
 In order to debug these sorts of issues:
 
 - Compile with ``-Werror``. This turns warnings into errors, which can be useful as some cases of undefined behavior would otherwise show warnings.
-- Use ``-s ASSERTIONS=2`` to get some useful information about the function pointer being called, and its type.
+- Use ``-sASSERTIONS=2`` to get some useful information about the function pointer being called, and its type.
 - Look at the browser stack trace to see where the error occurs and which function should have been called.
+- Enable clang warnings on dangerous function pointer casts using ``-Wcast-function-type``.
 - Build with :ref:`SAFE_HEAP=1 <debugging-SAFE-HEAP>`.
 - :ref:`Sanitizers` can help here, in particular UBSan.
 
@@ -286,7 +281,7 @@ it, you can do something like
 
 .. code-block:: bash
 
-  emcc tests/hello_world.c --memoryprofiler -o page.html
+  emcc test/hello_world.c --memoryprofiler -o page.html
 
 Note that you need to emit HTML as in that example, as the memory profiler
 output is rendered onto the page. To view it, load ``page.html`` in your
@@ -318,11 +313,11 @@ To run the *AutoDebugger*, compile with the environment variable ``EMCC_AUTODEBU
 .. code-block:: bash
 
   # Linux or macOS
-  EMCC_AUTODEBUG=1 emcc tests/hello_world.cpp -o hello.html
+  EMCC_AUTODEBUG=1 emcc test/hello_world.cpp -o hello.html
 
   # Windows
   set EMCC_AUTODEBUG=1
-  emcc tests/hello_world.cpp -o hello.html
+  emcc test/hello_world.cpp -o hello.html
   set EMCC_AUTODEBUG=0
 
 
@@ -341,7 +336,7 @@ Use the following workflow to find regressions with the *AutoDebugger*:
 Any difference between the outputs is likely to be caused by the bug.
 
 .. note::
-    You may want to use ``-s DETERMINISTIC`` which will ensure that timing
+    You may want to use ``-sDETERMINISTIC`` which will ensure that timing
     and other issues don't cause false positives.
 
 
@@ -349,7 +344,9 @@ Useful Links
 ============
 
 - `Blogpost about reading compiler output <http://mozakai.blogspot.com/2014/06/looking-through-emscripten-output.html>`_.
-- `GDC 2014: Getting started with asm.js and Emscripten <http://people.mozilla.org/~lwagner/gdc-pres/gdc-2014.html#/20>`_ (Debugging slides).
+- `GDC 2014: Getting started with asm.js and Emscripten <https://web.archive.org/web/20140325222509/http://people.mozilla.org/~lwagner/gdc-pres/gdc-2014.html#/20>`_ (Debugging slides).
+- `Links to Wasm debugging-related documents <https://web.dev/webassembly/#webassembly-debugging>`_
+
 
 Need help?
 ==========

@@ -15,6 +15,7 @@
 
 #include "sanitizer_common/sanitizer_platform.h"
 #include "lsan_common.h"
+#include "lsan_thread.h"
 
 #if CAN_SANITIZE_LEAKS && SANITIZER_EMSCRIPTEN
 #include <emscripten.h>
@@ -32,8 +33,6 @@
   } while (0)
 
 namespace __lsan {
-
-extern "C" uptr emscripten_get_heap_size();
 
 static const char kLinkerName[] = "ld";
 
@@ -106,14 +105,12 @@ void LockStuffAndStopTheWorld(StopTheWorldCallback callback,
                               CheckForLeaksParam *argument) {
   // Currently, on Emscripten this does nothing and just calls the callback.
   // This works fine on a single-threaded environment.
-  LockThreadRegistry();
+  LockThreads();
   LockAllocator();
   StopTheWorld(callback, argument);
   UnlockAllocator();
-  UnlockThreadRegistry();
+  UnlockThreads();
 }
-
-u32 GetCurrentThread();
 
 // This is based on ProcessThreads in lsan_common.cc.
 // We changed this to be a callback that gets called per thread by
@@ -134,16 +131,16 @@ static void ProcessThreadsCallback(ThreadContextBase *tctx, void *arg) {
                                             &tls_begin, &tls_end,
                                             &cache_begin, &cache_end, &dtls);
   if (!thread_found) {
-    LOG_THREADS("Thread %d not found in registry.\n", os_id);
+    LOG_THREADS("Thread %llu not found in registry.\n", os_id);
     return;
   }
 
   if (flags()->use_stacks) {
-    LOG_THREADS("Stack at %p-%p.\n", stack_begin, stack_end);
+    LOG_THREADS("Stack at %p-%p.\n", (void*)stack_begin, (void*)stack_end);
 
     // We can't get the SP for other threads to narrow down the range, but we
     // we can for the current thread.
-    if (tctx->tid == GetCurrentThread()) {
+    if (tctx->os_id == GetTid()) {
       uptr sp = (uptr) __builtin_frame_address(0);
       if (sp < stack_begin || sp >= stack_end) {
         // SP is outside the recorded stack range (e.g. the thread is running a
@@ -160,7 +157,7 @@ static void ProcessThreadsCallback(ThreadContextBase *tctx, void *arg) {
   }
 
   if (flags()->use_tls && tls_begin) {
-    LOG_THREADS("TLS at %p-%p.\n", tls_begin, tls_end);
+    LOG_THREADS("TLS at %p-%p.\n", (void*)tls_begin, (void*)tls_end);
     // If the tls and cache ranges don't overlap, scan full tls range,
     // otherwise, only scan the non-overlapping portions
     if (cache_begin == cache_end || tls_end < cache_begin ||
@@ -176,8 +173,10 @@ static void ProcessThreadsCallback(ThreadContextBase *tctx, void *arg) {
   }
 }
 
-void ProcessThreads(SuspendedThreadsList const &suspended_threads,
-                    Frontier *frontier) {
+void ProcessThreads(SuspendedThreadsList const& suspended_threads,
+                    Frontier* frontier,
+                    tid_t caller_tid,
+                    uptr caller_sp) {
   GetThreadRegistryLocked()->RunCallbackForEachThreadLocked(
     ProcessThreadsCallback, frontier);
 }

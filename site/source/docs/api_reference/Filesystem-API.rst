@@ -16,14 +16,14 @@ Emscripten predominantly compiles code that uses synchronous file I/O, so the ma
 
 File data in Emscripten is partitioned by mounted file systems. Several file systems are provided. An instance of :ref:`MEMFS <filesystem-api-memfs>` is mounted to ``/`` by default. The subdirectories `/home/web_user` and `/tmp` are also created automatically, in addition to several other special devices and streams (e.g. `/dev/null`, `/dev/random`, `/dev/stdin`, `/proc/self/fd`); see `FS.staticInit()` in the FS library for full details. Instances of :ref:`NODEFS <filesystem-api-nodefs>` and :ref:`IDBFS <filesystem-api-idbfs>` can be mounted to other directories if your application needs to :ref:`persist data <filesystem-api-persist-data>`.
 
-The automatic tests in `tests/test_core.py <https://github.com/emscripten-core/emscripten/blob/1.29.12/tests/test_core.py#L4285>`_ (search for ``test_files``) contain many examples of how to use this API. The :ref:`tutorial <tutorial-files>` also shows how to pre-load a file so that it can be read from compiled C/C++.
+The automatic tests in `test/test_core.py <https://github.com/emscripten-core/emscripten/blob/1.29.12/tests/test_core.py#L4285>`_ (search for ``test_files``) contain many examples of how to use this API. The :ref:`tutorial <tutorial-files>` also shows how to pre-load a file so that it can be read from compiled C/C++.
 
 A high level overview of the way File Systems work in Emscripten-ported code is provided in the :ref:`file-system-overview`.
 
 New File System: WasmFS
 =======================
 
-.. note:: Current Status: Work in Progress
+.. note:: Current Status: Stable, but not yet feature-complete with the old FS.
 
 WasmFS is a high-performance, fully-multithreaded, WebAssembly-based file system layer for Emscripten that will replace the existing JavaScript version.
 
@@ -31,16 +31,30 @@ The JavaScript-based file system was originally written before pthreads were sup
 
 `Design Doc Link <https://docs.google.com/document/d/1-ZxybGvz0nCqygUDuWxCcCBhCebev3EbUSYoSOlc49Q/edit?usp=sharing>`_
 
-`Github Tracking Issue <https://github.com/emscripten-core/emscripten/issues/15041>`_
+`GitHub Tracking Issue <https://github.com/emscripten-core/emscripten/issues/15041>`_
+
+Differences you may notice with the original JS filesystem include:
+
+- The original JS FS includes a lot of JS code by default, while WasmFS does
+  not. As a result, if you write JS of your own, say ``FS.mkdir()``, then the
+  JS FS would already have added that API support, and things would just work.
+  With WasmFS you must opt-in to including the full JS API, to avoid bloating
+  all builds. To do so, use ``-sFORCE_FILESYSTEM`` which forces the full
+  filesystem API to be supported from JS.
+
+- WasmFS requires malloc internally, so you cannot build with
+  ``-sWASMFS -sMALLOC=none``. If you want the smallest possible malloc, use
+  ``-sMALLOC=emmalloc``. (Note that the optimizer may be able to remove WasmFS
+  and malloc, if your code does not actually use files in a non-trivial way.)
 
 Including File System Support
 =============================
 
 Emscripten decides whether to include file system support automatically. Many programs don't need files, and file system support is not negligible in size, so Emscripten avoids including it when it doesn't see a reason to. That means that if your C/C++ code does not access files, then  the ``FS`` object and other file system APIs will not be included in the output. And, on the other hand, if your C/C++ code does use files, then file system support will be automatically included. So normally things will "just work" and you don't need to think about this at all.
 
-However, if your C/C++ code doesn't use files, but you want to use them from JavaScript, then you can build with ``-s FORCE_FILESYSTEM=1``, which will make the compiler include file system support even though it doesn't see it being used.
+However, if your C/C++ code doesn't use files, but you want to use them from JavaScript, then you can build with ``-sFORCE_FILESYSTEM``, which will make the compiler include file system support even though it doesn't see it being used.
 
-On the other hand, if you want to **not** include any filesystem support code (which may be included even due to printf or iostreams, due to how musl and libc++ are structured), you can build with ``-s FILESYSTEM=0``. Very simple stdout support will be included if necessary in such a case, enough for printf and such to work, but no filesystem code will be added, which can save a significant amount of code size.
+On the other hand, if you want to **not** include any filesystem support code (which may be included even due to printf or iostreams, due to how musl and libc++ are structured), you can build with ``-sFILESYSTEM=0``. Very simple stdout support will be included if necessary in such a case, enough for printf and such to work, but no filesystem code will be added, which can save a significant amount of code size.
 
 
 .. _filesystem-api-persist-data:
@@ -75,7 +89,7 @@ NODEFS
 
 This file system lets a program in *node* map directories (via a mount operation) on the host filesystem to directories in Emscripten's virtual filesystem. It uses node's synchronous `FS API <http://nodejs.org/api/fs.html>`_ to immediately persist any data written to the Emscripten file system to your local disk.
 
-See `this test <https://github.com/emscripten-core/emscripten/blob/main/tests/fs/test_nodefs_rw.c>`_ for an example.
+See `this test <https://github.com/emscripten-core/emscripten/blob/main/test/fs/test_nodefs_rw.c>`_ for an example.
 
 .. _filesystem-api-noderawfs:
 
@@ -84,8 +98,8 @@ NODERAWFS
 
 .. note:: This file system is only for use when running inside :term:`node.js`.
 
-This is a special backend as it replaces all normal filesystem access with direct Node.js operations, without the need to do `FS.mount()`. The initial working directory will be same as process.cwd() instead of VFS root directory.  Because this mode directly uses Node.js to access the real local filesystem on your OS, the code will not necessarily be portable between OSes - it will be as portable as a Node.js program would be, which means that differences in how the underlying OS handles permissions and errors and so forth may be noticeable.  This has mostly been tested on Linux so far. 
- 
+This is a special backend as it replaces all normal filesystem access with direct Node.js operations, without the need to do `FS.mount()`. The initial working directory will be same as process.cwd() instead of VFS root directory.  Because this mode directly uses Node.js to access the real local filesystem on your OS, the code will not necessarily be portable between OSes - it will be as portable as a Node.js program would be, which means that differences in how the underlying OS handles permissions and errors and so forth may be noticeable.  This has mostly been tested on Linux so far.
+
 See `this <https://github.com/emscripten-core/emscripten/blob/d936e807c4d7a6163827c1fdc4a8e87abe41db44/tests/fs/test_nodefs_rw.c#L31>`_ section on NODEFS, where you can see a mount operation - this is not needed in NODERAWFS.
 
 .. _filesystem-api-idbfs:
@@ -98,6 +112,8 @@ IDBFS
 The *IDBFS* file system implements the :js:func:`FS.syncfs` interface, which when called will persist any operations to an ``IndexedDB`` instance.
 
 This is provided to overcome the limitation that browsers do not offer synchronous APIs for persistent storage, and so (by default) all writes exist only temporarily in-memory.
+
+If the mount option `autoPersist: true` is passed when mounting IDBFS, then whenever any changes are made to the IDBFS directory tree, they will be automatically persisted to the IndexedDB backend. This lets users avoid needing to manually call `FS.syncfs` to persist changes to the IDBFS mounted directory tree.
 
 .. _filesystem-api-workerfs:
 
@@ -180,6 +196,7 @@ By default:
 File system API
 ===============
 
+.. note:: Functions derived from libc like ``FS.readdir()`` use all-lowercase names, whereas added functions like ``FS.readFile()`` use camelCase names.
 
 .. js:function:: FS.mount(type, opts, mountpoint)
 
@@ -260,7 +277,7 @@ File system API
        });
      }
 
-  A real example of this functionality can be seen in `test_idbfs_sync.c <https://github.com/emscripten-core/emscripten/blob/main/tests/fs/test_idbfs_sync.c>`_.
+  A real example of this functionality can be seen in `test_idbfs_sync.c <https://github.com/emscripten-core/emscripten/blob/main/test/fs/test_idbfs_sync.c>`_.
 
   :param bool populate: ``true`` to initialize Emscripten's file system data with the data from the file system's persistent source, and ``false`` to save Emscripten`s file system data to the file system's persistent source.
   :param callback: A notification callback function that is invoked on completion of the synchronization. If an error occurred, it will be provided as a parameter to this function.
@@ -700,7 +717,7 @@ File system API
 
 .. js:data:: FS.trackingDelegate[callback name]
 
-  Users can specify callbacks to receive different filesystem events. This is useful for tracking changes in the filesystem.
+  Users can specify callbacks to receive different filesystem events. This is useful for tracking changes in the filesystem. This requires -sFS_DEBUG.
 
   .. _fs-callback-names:
 
@@ -874,6 +891,14 @@ Paths
 
   :param string path: The path to set as current working directory.
 
+
+.. js:function:: FS.readdir(path)
+
+  Reads the contents of the ``path``.
+
+  :param string path: The incoming path.
+
+  :returns: an array of the names of the files in the directory including ``'.'`` and ``'..'``.
 
 .. js:function:: FS.lookupPath(path, opts)
 

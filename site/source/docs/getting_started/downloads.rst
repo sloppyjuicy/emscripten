@@ -52,7 +52,9 @@ GitHub and set them as :term:`active <Active Tool/SDK>`:
     # Activate PATH and other environment variables in the current terminal
     source ./emsdk_env.sh
 
-  .. note:: On Windows, run ``emsdk`` instead of ``./emsdk``, and ``emsdk_env.bat`` instead of ``source ./emsdk_env.sh``.
+  .. tip:: If you want to avoid executing `source ./emsdk_env.sh` every time you open a new terminal you can follow the instructions given by the `emsdk activate` command above to add this command to your startup scripts.
+
+  .. note:: On Windows, run ``emsdk.bat`` instead of ``./emsdk``, and ``emsdk_env.bat`` instead of ``source ./emsdk_env.sh``.
 
   .. note:: On Windows, if you use the ``activate`` command, the step of ``emsdk_env.bat`` is optional. If you want to know more, see :ref:`activate SDK version <emsdk-set-active-tools>`.
 
@@ -117,6 +119,8 @@ Windows
 
 macOS
 +++++
+
+.. note:: Emscripten requires macOS 10.14 Mojave or above.
 
 If you use the Emscripten SDK it includes a bundled version of Python 3.
 Otherwise you will need to manually install and use Python 3.6 or newer.
@@ -256,9 +260,5 @@ The following is a partial list of such unofficial emscripten packages:
  - maintainer: @chenrui333
 
 **Arch Linux**
- - package info: https://github.com/archlinux/svntogit-community/tree/packages/emscripten/trunk
- - maintainer: Sven-Hendrik Haase <svenstaro@gmail.com>
-
-**Gentoo Linux** (custom overlay)
- - package info: `dev-util/emscripten` in `darthgandalf-overlay <https://github.com/DarthGandalf/gentoo-overlay>`_
- - maintainer: @DarthGandalf
+ - package info: https://archlinux.org/packages/extra/x86_64/emscripten
+ - maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>

@@ -19,7 +19,14 @@
 #endif
 
 #ifndef __scc
+#ifdef __EMSCRIPTEN__
+// With emscripten we allow the passing of longer-than-word-sized
+// argument (such as off_t on wasm32) and let binaryen handle splitting
+// them into a pair of i32 arguments.
+#define __scc(X) ((long long) (X))
+#else
 #define __scc(X) ((long) (X))
+#endif
 typedef long syscall_arg_t;
 #endif
 
@@ -88,7 +95,6 @@ hidden long __syscall_ret(unsigned long),
 #define __socketcall(nm,a,b,c,d,e,f) __syscall(SYS_##nm, a, b, c, d, e, f)
 #define __socketcall_cp(nm,a,b,c,d,e,f) __syscall_cp(SYS_##nm, a, b, c, d, e, f)
 #else
-static inline long __alt_socketcall(int sys, int sock, int cp, long a, long b, long c, long d, long e, long f)
 {
 	long r;
 	if (cp) r = __syscall_cp(sys, a, b, c, d, e, f);
@@ -101,9 +107,9 @@ static inline long __alt_socketcall(int sys, int sock, int cp, long a, long b, l
 	return r;
 }
 #define __socketcall(nm, a, b, c, d, e, f) __alt_socketcall(SYS_##nm, __SC_##nm, 0, \
-	(long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
+	__scc(a), __scc(b), __scc(c), __scc(d), __scc(e), __scc(f))
 #define __socketcall_cp(nm, a, b, c, d, e, f) __alt_socketcall(SYS_##nm, __SC_##nm, 1, \
-	(long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
+	__scc(a), __scc(b), __scc(c), __scc(d), __scc(e), __scc(f))
 #endif
 
 /* fixup legacy 16-bit junk */
@@ -128,7 +134,6 @@ static inline long __alt_socketcall(int sys, int sock, int cp, long a, long b, l
 #undef SYS_setgid
 #undef SYS_setfsuid
 #undef SYS_setfsgid
-#define SYS_lchown SYS_lchown32
 #define SYS_getuid SYS_getuid32
 #define SYS_getgid SYS_getgid32
 #define SYS_geteuid SYS_geteuid32
@@ -142,7 +147,6 @@ static inline long __alt_socketcall(int sys, int sock, int cp, long a, long b, l
 #define SYS_getresuid SYS_getresuid32
 #define SYS_setresgid SYS_setresgid32
 #define SYS_getresgid SYS_getresgid32
-#define SYS_chown SYS_chown32
 #define SYS_setuid SYS_setuid32
 #define SYS_setgid SYS_setgid32
 #define SYS_setfsuid SYS_setfsuid32
@@ -232,43 +236,43 @@ static inline long __alt_socketcall(int sys, int sock, int cp, long a, long b, l
 #define SYS_sendfile SYS_sendfile64
 #endif
 
-#ifndef SYS_timer_settime
+#ifdef SYS_timer_settime32
 #define SYS_timer_settime SYS_timer_settime32
 #endif
 
-#ifndef SYS_timer_gettime
+#ifdef SYS_timer_gettime32
 #define SYS_timer_gettime SYS_timer_gettime32
 #endif
 
-#ifndef SYS_timerfd_settime
+#ifdef SYS_timerfd_settime32
 #define SYS_timerfd_settime SYS_timerfd_settime32
 #endif
 
-#ifndef SYS_timerfd_gettime
+#ifdef SYS_timerfd_gettime32
 #define SYS_timerfd_gettime SYS_timerfd_gettime32
 #endif
 
-#ifndef SYS_clock_settime
+#ifdef SYS_clock_settime32
 #define SYS_clock_settime SYS_clock_settime32
 #endif
 
-#ifndef SYS_clock_gettime
+#ifdef SYS_clock_gettime32
 #define SYS_clock_gettime SYS_clock_gettime32
 #endif
 
-#ifndef SYS_clock_getres
+#ifdef SYS_clock_getres_time32
 #define SYS_clock_getres SYS_clock_getres_time32
 #endif
 
-#ifndef SYS_clock_nanosleep
+#ifdef SYS_clock_nanosleep_time32
 #define SYS_clock_nanosleep SYS_clock_nanosleep_time32
 #endif
 
-#ifndef SYS_gettimeofday
+#ifdef SYS_gettimeofday_time32
 #define SYS_gettimeofday SYS_gettimeofday_time32
 #endif
 
-#ifndef SYS_settimeofday
+#ifdef SYS_settimeofday_time32
 #define SYS_settimeofday SYS_settimeofday_time32
 #endif
 
@@ -428,6 +432,18 @@ static inline long __alt_socketcall(int sys, int sock, int cp, long a, long b, l
 
 #define __sys_open_cp(...) __SYSCALL_DISP(__sys_open_cp,,__VA_ARGS__)
 #define sys_open_cp(...) __syscall_ret(__sys_open_cp(__VA_ARGS__))
+
+#ifdef SYS_wait4
+#define __sys_wait4(a,b,c,d) __syscall(SYS_wait4,a,b,c,d)
+#define __sys_wait4_cp(a,b,c,d) __syscall_cp(SYS_wait4,a,b,c,d)
+#else
+hidden long __emulate_wait4(int, int *, int, void *, int);
+#define __sys_wait4(a,b,c,d) __emulate_wait4(a,b,c,d,0)
+#define __sys_wait4_cp(a,b,c,d) __emulate_wait4(a,b,c,d,1)
+#endif
+
+#define sys_wait4(a,b,c,d) __syscall_ret(__sys_wait4(a,b,c,d))
+#define sys_wait4_cp(a,b,c,d) __syscall_ret(__sys_wait4_cp(a,b,c,d))
 
 #ifdef __cplusplus
 hidden void __procfdname(char __buf[], unsigned);

@@ -3,22 +3,28 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
+import copy
 import difflib
 import os
 import re
+from typing import Set, Dict, Any
 
 from .utils import path_from_root, exit_with_error
 from . import diagnostics
 
 # Subset of settings that take a memory size (i.e. 1Gb, 64kb etc)
 MEM_SIZE_SETTINGS = {
+    'GLOBAL_BASE',
+    'STACK_SIZE',
     'TOTAL_STACK',
+    'INITIAL_HEAP',
     'INITIAL_MEMORY',
     'MEMORY_GROWTH_LINEAR_STEP',
     'MEMORY_GROWTH_GEOMETRIC_CAP',
     'GL_MAX_TEMP_BUFFER_SIZE',
     'MAXIMUM_MEMORY',
-    'DEFAULT_PTHREAD_STACK_SIZE'
+    'DEFAULT_PTHREAD_STACK_SIZE',
+    'ASYNCIFY_STACK_SIZE',
 }
 
 PORTS_SETTINGS = {
@@ -47,6 +53,28 @@ PORTS_SETTINGS = {
     'USE_FREETYPE',
     'SDL2_MIXER_FORMATS',
     'SDL2_IMAGE_FORMATS',
+    'USE_SQLITE3',
+}
+
+# Subset of settings that apply only when generating JS
+JS_ONLY_SETTINGS = {
+    'DEFAULT_LIBRARY_FUNCS_TO_INCLUDE',
+    'INCLUDE_FULL_LIBRARY',
+    'PROXY_TO_WORKER',
+    'PROXY_TO_WORKER_FILENAME',
+    'BUILD_AS_WORKER',
+    'STRICT_JS',
+    'SMALL_XHR_CHUNKS',
+    'HEADLESS',
+    'MODULARIZE',
+    'EXPORT_ES6',
+    'USE_ES6_IMPORT_META',
+    'EXPORT_NAME',
+    'DYNAMIC_EXECUTION',
+    'PTHREAD_POOL_SIZE',
+    'PTHREAD_POOL_SIZE_STRICT',
+    'PTHREAD_POOL_DELAY_LOAD',
+    'DEFAULT_PTHREAD_STACK_SIZE',
 }
 
 # Subset of settings that apply at compile time.
@@ -56,39 +84,71 @@ COMPILE_TIME_SETTINGS = {
     'INLINING_LIMIT',
     'DISABLE_EXCEPTION_CATCHING',
     'DISABLE_EXCEPTION_THROWING',
+    'WASM_LEGACY_EXCEPTIONS',
     'MAIN_MODULE',
     'SIDE_MODULE',
     'RELOCATABLE',
+    'LINKABLE',
     'STRICT',
     'EMSCRIPTEN_TRACING',
-    'USE_PTHREADS',
+    'PTHREADS',
+    'USE_PTHREADS', # legacy name of PTHREADS setting
     'SHARED_MEMORY',
     'SUPPORT_LONGJMP',
-    'DEFAULT_TO_CXX',
     'WASM_OBJECT_FILES',
     'WASM_WORKERS',
+    'BULK_MEMORY',
 
     # Internal settings used during compilation
     'EXCEPTION_CATCHING_ALLOWED',
-    'EXCEPTION_HANDLING',
+    'WASM_EXCEPTIONS',
     'LTO',
     'OPT_LEVEL',
     'DEBUG_LEVEL',
 
+    # Affects ports
+    'GL_ENABLE_GET_PROC_ADDRESS', # NOTE: if SDL2 is updated to not rely on eglGetProcAddress(), this can be removed
+
     # This is legacy setting that we happen to handle very early on
     'RUNTIME_LINKED_LIBS',
-    # TODO: should not be here
-    'AUTO_ARCHIVE_INDEXES',
-    'DEFAULT_LIBRARY_FUNCS_TO_INCLUDE',
 }.union(PORTS_SETTINGS)
+
+# Unlike `LEGACY_SETTINGS`, deprecated settings can still be used
+# both on the command line and in the emscripten codebase.
+#
+# At some point in the future, once folks have stopped using these
+# settings we can move them to `LEGACY_SETTINGS`.
+DEPRECATED_SETTINGS = {
+    'SUPPORT_ERRNO': 'emscripten no longer uses the setErrNo library function',
+    'EXTRA_EXPORTED_RUNTIME_METHODS': 'please use EXPORTED_RUNTIME_METHODS instead',
+    'DEMANGLE_SUPPORT': 'mangled names no longer appear in stack traces',
+    'RUNTIME_LINKED_LIBS': 'you can simply list the libraries directly on the commandline now',
+    'CLOSURE_WARNINGS': 'use -Wclosure instead',
+    'LEGALIZE_JS_FFI': 'to disable JS type legalization use `-sWASM_BIGINT` or `-sSTANDALONE_WASM`',
+    'ASYNCIFY_EXPORTS': 'please use JSPI_EXPORTS instead'
+}
+
+# Settings that don't need to be externalized when serializing to json because they
+# are not used by the JS compiler.
+INTERNAL_SETTINGS = {
+    'SIDE_MODULE_IMPORTS',
+}
+
+user_settings: Dict[str, str] = {}
+
+
+def default_setting(name, new_default):
+  if name not in user_settings:
+    setattr(settings, name, new_default)
 
 
 class SettingsManager:
-  attrs = {}
-  allowed_settings = set()
-  legacy_settings = {}
-  alt_names = {}
-  internal_settings = set()
+  attrs: Dict[str, Any] = {}
+  types: Dict[str, Any] = {}
+  allowed_settings: Set[str] = set()
+  legacy_settings: Dict[str, tuple] = {}
+  alt_names: Dict[str, str] = {}
+  internal_settings: Set[str] = set()
 
   def __init__(self):
     self.attrs.clear()
@@ -100,14 +160,22 @@ class SettingsManager:
     # Load the JS defaults into python.
     def read_js_settings(filename, attrs):
       with open(filename) as fh:
-        settings = fh.read().replace('//', '#')
+        settings = fh.read()
+      # Use a bunch of regexs to convert the file from JS to python
+      # TODO(sbc): This is kind hacky and we should probably convert
+      # this file in format that python can read directly (since we
+      # no longer read this file from JS at all).
+      settings = settings.replace('//', '#')
       settings = re.sub(r'var ([\w\d]+)', r'attrs["\1"]', settings)
+      settings = re.sub(r'=\s+false\s*;', '= False', settings)
+      settings = re.sub(r'=\s+true\s*;', '= True', settings)
       exec(settings, {'attrs': attrs})
 
     internal_attrs = {}
     read_js_settings(path_from_root('src/settings.js'), self.attrs)
     read_js_settings(path_from_root('src/settings_internal.js'), internal_attrs)
     self.attrs.update(internal_attrs)
+    self.infer_types()
 
     if 'EMCC_STRICT' in os.environ:
       self.attrs['STRICT'] = int(os.environ.get('EMCC_STRICT'))
@@ -131,8 +199,20 @@ class SettingsManager:
 
     self.internal_settings.update(internal_attrs.keys())
 
+  def infer_types(self):
+    for key, value in self.attrs.items():
+      self.types[key] = type(value)
+
   def dict(self):
     return self.attrs
+
+  def external_dict(self, skip_keys={}): # noqa
+    external_settings = {k: v for k, v in self.dict().items() if k not in INTERNAL_SETTINGS and k not in skip_keys}
+    # Only the names of the legacy settings are used by the JS compiler
+    # so we can reduce the size of serialized json by simplifying this
+    # otherwise complex value.
+    external_settings['LEGACY_SETTINGS'] = [l[0] for l in external_settings['LEGACY_SETTINGS']]
+    return external_settings
 
   def keys(self):
     return self.attrs.keys()
@@ -166,7 +246,7 @@ class SettingsManager:
         exit_with_error('legacy setting used in strict mode: %s', name)
       fixed_values, error_message = self.legacy_settings[name]
       if fixed_values and value not in fixed_values:
-        exit_with_error('Invalid command line option -s ' + name + '=' + str(value) + ': ' + error_message)
+        exit_with_error(f'invalid command line setting `-s{name}={value}`: {error_message}')
       diagnostics.warning('legacy-settings', 'use of legacy setting: %s (%s)', name, error_message)
 
     if name in self.alt_names:
@@ -185,13 +265,36 @@ class SettingsManager:
       msg += ' - (see src/settings.js for valid values)'
       exit_with_error(msg)
 
+    self.check_type(name, value)
     self.attrs[name] = value
+
+  def check_type(self, name, value):
+    # These settings have a variable type so cannot be easily type checked.
+    if name in ('SUPPORT_LONGJMP', 'PTHREAD_POOL_SIZE', 'SEPARATE_DWARF', 'LTO', 'MODULARIZE'):
+      return
+    expected_type = self.types.get(name)
+    if not expected_type:
+      return
+    # Allow integers 1 and 0 for type `bool`
+    if expected_type == bool:
+      if value in (1, 0):
+        value = bool(value)
+      if value in ('True', 'False', 'true', 'false'):
+        exit_with_error('attempt to set `%s` to `%s`; use 1/0 to set boolean settings' % (name, value))
+    if type(value) is not expected_type:
+      exit_with_error('setting `%s` expects `%s` but got `%s`' % (name, expected_type.__name__, type(value).__name__))
 
   def __getitem__(self, key):
     return self.attrs[key]
 
   def __setitem__(self, key, value):
     self.attrs[key] = value
+
+  def backup(self):
+    return copy.deepcopy(self.attrs)
+
+  def restore(self, previous):
+    self.attrs.update(previous)
 
 
 settings = SettingsManager()

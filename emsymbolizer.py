@@ -8,17 +8,19 @@
 # line/column number, potentially including inlining.
 # If the wasm has separate DWARF info, do the above with the side file
 # If there is a source map, we can parse it to get file and line number.
-# If there is an emscripten symbol map, we can parse that to get the symbol name
-# If there is a name section or symbol table, llvm-nm can show the symbol name.
+# If there is an emscripten symbol map, we can use that to get the symbol name
+# If there is a name section or symbol table, llvm-symbolizer can show the
+#  symbol name.
+# Separate DWARF and emscripten symbol maps are not supported yet.
 
 import argparse
-from collections import namedtuple
 import json
 import os
+import re
+import subprocess
 import sys
 from tools import shared
 from tools import webassembly
-from tools.shared import check_call
 
 LLVM_SYMBOLIZER = os.path.expanduser(
     shared.build_llvm_tool_path(shared.exe_suffix('llvm-symbolizer')))
@@ -28,25 +30,65 @@ class Error(BaseException):
   pass
 
 
+# Class to treat location info in a uniform way across information sources.
+class LocationInfo(object):
+  def __init__(self, source=None, line=0, column=0, func=None):
+    self.source = source
+    self.line = line
+    self.column = column
+    self.func = func
+
+  def print(self):
+    source = self.source if self.source else '??'
+    func = self.func if self.func else '??'
+    print(f'{func}\n{source}:{self.line}:{self.column}')
+
+
 def get_codesec_offset(module):
-  for sec in module.sections():
-    if sec.type == webassembly.SecType.CODE:
-      return sec.offset
-  raise Error(f'No code section found in {module.filename}')
+  sec = module.get_section(webassembly.SecType.CODE)
+  if not sec:
+    raise Error(f'No code section found in {module.filename}')
+  return sec.offset
 
 
 def has_debug_line_section(module):
-  for sec in module.sections():
-    if sec.name == ".debug_line":
-      return True
-  return False
+  return module.get_custom_section('.debug_line') is not None
 
 
-def symbolize_address_dwarf(module, address):
-  vma_adjust = get_codesec_offset(module)
+def has_name_section(module):
+  return module.get_custom_section('name') is not None
+
+
+def has_linking_section(module):
+  return module.get_custom_section('linking') is not None
+
+
+def symbolize_address_symbolizer(module, address, is_dwarf):
+  if is_dwarf:
+    vma_adjust = get_codesec_offset(module)
+  else:
+    vma_adjust = 0
   cmd = [LLVM_SYMBOLIZER, '-e', module.filename, f'--adjust-vma={vma_adjust}',
          str(address)]
-  check_call(cmd)
+  out = shared.run_process(cmd, stdout=subprocess.PIPE).stdout.strip()
+  out_lines = out.splitlines()
+
+  # Source location regex, e.g., /abc/def.c:3:5
+  SOURCE_LOC_RE = re.compile(r'(.+):(\d+):(\d+)$')
+  # llvm-symbolizer prints two lines per location. The first line contains a
+  # function name, and the second contains a source location like
+  # '/abc/def.c:3:5'. If the function or source info is not available, it will
+  # be printed as '??', in which case we store None. If the line and column info
+  # is not available, they will be printed as 0, which we store as is.
+  for i in range(0, len(out_lines), 2):
+    func, loc_str = out_lines[i], out_lines[i + 1]
+    m = SOURCE_LOC_RE.match(loc_str)
+    source, line, column = m.group(1), m.group(2), m.group(3)
+    if func == '??':
+      func = None
+    if source == '??':
+      source = None
+    LocationInfo(source, line, column, func).print()
 
 
 def get_sourceMappingURL_section(module):
@@ -57,15 +99,17 @@ def get_sourceMappingURL_section(module):
 
 
 class WasmSourceMap(object):
-  # This implementation is derived from emscripten's sourcemap-support.js
-  Location = namedtuple('Location',
-                        ['source', 'line', 'column', 'name'])
+  class Location(object):
+    def __init__(self, source=None, line=0, column=0, func=None):
+      self.source = source
+      self.line = line
+      self.column = column
+      self.func = func
 
   def __init__(self):
     self.version = None
     self.sources = []
-    self.names = []
-    self.mapping = {}
+    self.mappings = {}
     self.offsets = []
 
   def parse(self, filename):
@@ -76,22 +120,19 @@ class WasmSourceMap(object):
 
     self.version = source_map_json['version']
     self.sources = source_map_json['sources']
-    self.names = source_map_json['names']
 
-    vlq_map = {}
     chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
-    for i, c in enumerate(chars):
-      vlq_map[c] = i
+    vlq_map = {c: i for i, c in enumerate(chars)}
 
     def decodeVLQ(string):
       result = []
       shift = 0
       value = 0
-      for i, c in enumerate(string):
+      for c in string:
         try:
           integer = vlq_map[c]
-        except ValueError:
-          raise Error(f'Invalid character ({c}) in VLQ')
+        except ValueError as e:
+          raise Error(f'Invalid character ({c}) in VLQ') from e
         value += (integer & 31) << shift
         if integer & 32:
           shift += 5
@@ -106,8 +147,7 @@ class WasmSourceMap(object):
     src = 0
     line = 1
     col = 1
-    name = 0
-    for i, segment in enumerate(source_map_json['mappings'].split(',')):
+    for segment in source_map_json['mappings'].split(','):
       data = decodeVLQ(segment)
       info = []
 
@@ -121,11 +161,9 @@ class WasmSourceMap(object):
       if len(data) >= 4:
         col += data[3]
         info.append(col)
-      if len(data) >= 5:
-        name += data[4]
-        info.append(name)
+      # TODO: see if we need the name, which is the next field (data[4])
 
-      self.mapping[offset] = WasmSourceMap.Location(*info)
+      self.mappings[offset] = WasmSourceMap.Location(*info)
       self.offsets.append(offset)
     self.offsets.sort()
 
@@ -144,18 +182,13 @@ class WasmSourceMap(object):
 
   def lookup(self, offset):
     nearest = self.find_offset(offset)
-    assert nearest in self.mapping, 'Sourcemap has an offset with no mapping'
-    info = self.mapping[nearest]
-
-    # TODO: it's kind of icky to use Location for both the internal indexed
-    # location and external string version. Once we have more uniform output
-    # format and API for the various backends (e.g SM vs DWARF vs others), this
-    # could be improved.
-    return WasmSourceMap.Location(
+    assert nearest in self.mappings, 'Sourcemap has an offset with no mapping'
+    info = self.mappings[nearest]
+    return LocationInfo(
         self.sources[info.source] if info.source is not None else None,
         info.line,
-        info.column,
-        self.names[info.name] if info.name is not None else None)
+        info.column
+      )
 
 
 def symbolize_address_sourcemap(module, address, force_file):
@@ -165,9 +198,9 @@ def symbolize_address_sourcemap(module, address, force_file):
     section = get_sourceMappingURL_section(module)
     assert section
     module.seek(section.offset)
-    assert module.readString() == 'sourceMappingURL'
+    assert module.read_string() == 'sourceMappingURL'
     # TODO: support stripping/replacing a prefix from the URL
-    URL = module.readString()
+    URL = module.read_string()
 
   if shared.DEBUG:
     print(f'Source Mapping URL: {URL}')
@@ -175,42 +208,44 @@ def symbolize_address_sourcemap(module, address, force_file):
   sm.parse(URL)
   if shared.DEBUG:
     csoff = get_codesec_offset(module)
-    print(sm.mapping)
+    print(sm.mappings)
     # Print with section offsets to easily compare against dwarf
-    for k, v in sm.mapping.items():
+    for k, v in sm.mappings.items():
       print(f'{k-csoff:x}: {v}')
-  print(sm.lookup(address))
+  sm.lookup(address).print()
 
 
 def main(args):
-  module = webassembly.Module(args.wasm_file)
-  base = 16 if args.address.lower().startswith('0x') else 10
-  address = int(args.address, base)
-  symbolized = 0
+  with webassembly.Module(args.wasm_file) as module:
+    base = 16 if args.address.lower().startswith('0x') else 10
+    address = int(args.address, base)
 
-  if args.addrtype == 'code':
-    address += get_codesec_offset(module)
+    if args.addrtype == 'code':
+      address += get_codesec_offset(module)
 
-  if ((has_debug_line_section(module) and not args.source) or
-     'dwarf' in args.source):
-    symbolize_address_dwarf(module, address)
-    symbolized += 1
-
-  if ((get_sourceMappingURL_section(module) and not args.source) or
-     'sourcemap' in args.source):
-    symbolize_address_sourcemap(module, address, args.file)
-    symbolized += 1
-
-  if not symbolized:
-    raise Error('No .debug_line or sourceMappingURL section found in '
-                f'{module.filename}.'
-                " I don't know how to symbolize this file yet")
+    if ((has_debug_line_section(module) and not args.source) or
+       'dwarf' in args.source):
+      symbolize_address_symbolizer(module, address, is_dwarf=True)
+    elif ((get_sourceMappingURL_section(module) and not args.source) or
+          'sourcemap' in args.source):
+      symbolize_address_sourcemap(module, address, args.file)
+    elif ((has_name_section(module) and not args.source) or
+          'names' in args.source):
+      symbolize_address_symbolizer(module, address, is_dwarf=False)
+    elif ((has_linking_section(module) and not args.source) or
+          'symtab' in args.source):
+      symbolize_address_symbolizer(module, address, is_dwarf=False)
+    else:
+      raise Error('No .debug_line or sourceMappingURL section found in '
+                  f'{module.filename}.'
+                  " I don't know how to symbolize this file yet")
 
 
 def get_args():
   parser = argparse.ArgumentParser()
-  parser.add_argument('-s', '--source', help='Force debug info source type',
-                      default=())
+  parser.add_argument('-s', '--source', choices=['dwarf', 'sourcemap',
+                                                 'names', 'symtab'],
+                      help='Force debug info source type', default=())
   parser.add_argument('-f', '--file', action='store',
                       help='Force debug info source file')
   parser.add_argument('-t', '--addrtype', choices=['code', 'file'],
@@ -222,14 +257,12 @@ def get_args():
   parser.add_argument('address', help='Address to lookup')
   args = parser.parse_args()
   if args.verbose:
-    shared.PRINT_STAGES = 1
+    shared.PRINT_SUBPROCS = 1
     shared.DEBUG = True
   return args
 
 
 if __name__ == '__main__':
-  print('Warning: the command-line and output format of this tool are not '
-        'finalized yet', file=sys.stderr)
   try:
     rv = main(get_args())
   except (Error, webassembly.InvalidWasmError, OSError) as e:

@@ -23,8 +23,8 @@
 #include "ubsan/ubsan_platform.h"
 
 #if SANITIZER_EMSCRIPTEN
-extern "C" void emscripten_builtin_free(void *);
-#include <emscripten/em_asm.h>
+#include <emscripten/heap.h>
+#include "emscripten_internal.h"
 #endif
 
 
@@ -97,7 +97,7 @@ void InitializeFlags() {
   RegisterCommonFlags(&ubsan_parser);
 #endif
 
-  if (SANITIZER_MAC) {
+  if (SANITIZER_APPLE) {
     // Support macOS MallocScribble and MallocPreScribble:
     // <https://developer.apple.com/library/content/documentation/Performance/
     // Conceptual/ManagingMemory/Articles/MallocDebug.html>
@@ -130,20 +130,16 @@ void InitializeFlags() {
   // Override from Emscripten Module.
   // TODO: add EM_ASM_I64 and avoid using a double for a 64-bit pointer.
 #define MAKE_OPTION_LOAD(parser, name) \
-    options = (char*)(long)EM_ASM_DOUBLE({ \
-      return withBuiltinMalloc(function () { \
-        return allocateUTF8(Module[name] || 0); \
-      }); \
-    }); \
+    options = _emscripten_sanitizer_get_option(name); \
     parser.ParseString(options); \
     emscripten_builtin_free(options);
 
-  MAKE_OPTION_LOAD(asan_parser, 'ASAN_OPTIONS');
+  MAKE_OPTION_LOAD(asan_parser, "ASAN_OPTIONS");
 #if CAN_SANITIZE_LEAKS
-  MAKE_OPTION_LOAD(lsan_parser, 'LSAN_OPTIONS');
+  MAKE_OPTION_LOAD(lsan_parser, "LSAN_OPTIONS");
 #endif
 #if CAN_SANITIZE_UB
-  MAKE_OPTION_LOAD(ubsan_parser, 'UBSAN_OPTIONS');
+  MAKE_OPTION_LOAD(ubsan_parser, "UBSAN_OPTIONS");
 #endif
 #else
   // Override from command line.
@@ -177,9 +173,9 @@ void InitializeFlags() {
            SanitizerToolName);
     Die();
   }
-  // Ensure that redzone is at least SHADOW_GRANULARITY.
-  if (f->redzone < (int)SHADOW_GRANULARITY)
-    f->redzone = SHADOW_GRANULARITY;
+  // Ensure that redzone is at least ASAN_SHADOW_GRANULARITY.
+  if (f->redzone < (int)ASAN_SHADOW_GRANULARITY)
+    f->redzone = ASAN_SHADOW_GRANULARITY;
   // Make "strict_init_order" imply "check_initialization_order".
   // TODO(samsonov): Use a single runtime flag for an init-order checker.
   if (f->strict_init_order) {

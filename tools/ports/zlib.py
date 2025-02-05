@@ -4,11 +4,9 @@
 # found in the LICENSE file.
 
 import os
-import shutil
-from pathlib import Path
 
-VERSION = '1.2.11'
-HASH = 'a42b8359e76cf7b3ae70bf31f0f8a8caa407ac80e8fe08b838076cd5e45ac2e685dae45eb59db2d25543fb3b5bd13b843a02bb8373cda704d7238be50d5e9c68'
+VERSION = '1.3.1'
+HASH = '8c9642495bafd6fad4ab9fb67f09b268c69ff9af0f4f20cf15dfc18852ff1f312bd8ca41de761b3f8d8e90e77d79f2ccacd3d4c5b19e475ecf09d021fdfe9088'
 
 
 def needed(settings):
@@ -16,46 +14,27 @@ def needed(settings):
 
 
 def get(ports, settings, shared):
-  ports.fetch_project('zlib', f'https://storage.googleapis.com/webassembly/emscripten-ports/zlib-{VERSION}.zip', 'zlib-' + VERSION, sha512hash=HASH)
+  ports.fetch_project('zlib', f'https://github.com/madler/zlib/archive/refs/tags/v{VERSION}.tar.gz', sha512hash=HASH)
 
   def create(final):
-    ports.clear_project_build('zlib')
-
-    source_path = os.path.join(ports.get_dir(), 'zlib', 'zlib-' + VERSION)
-    dest_path = os.path.join(ports.get_build_dir(), 'zlib')
-    shared.try_delete(dest_path)
-    os.makedirs(dest_path)
-    shutil.rmtree(dest_path, ignore_errors=True)
-    shutil.copytree(source_path, dest_path)
-    Path(dest_path, 'zconf.h').write_text(zconf_h)
-    ports.install_headers(dest_path)
+    source_path = ports.get_dir('zlib', 'zlib-' + VERSION)
+    ports.write_file(os.path.join(source_path, 'zconf.h'), zconf_h)
+    ports.install_headers(source_path)
 
     # build
     srcs = 'adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c gzwrite.c infback.c inffast.c inflate.c inftrees.c trees.c uncompr.c zutil.c'.split()
-    commands = []
-    o_s = []
-    for src in srcs:
-      o = os.path.join(dest_path, src + '.o')
-      shared.safe_ensure_dirs(os.path.dirname(o))
-      commands.append([shared.EMCC, os.path.join(dest_path, src), '-O2', '-o', o, '-I' + dest_path, '-w', '-c'])
-      o_s.append(o)
-    ports.run_commands(commands)
+    flags = ['-Wno-deprecated-non-prototype']
+    ports.build_port(source_path, final, 'zlib', srcs=srcs, flags=flags)
 
-    ports.create_lib(final, o_s)
-
-  return [shared.Cache.get_lib('libz.a', create, what='port')]
+  return [shared.cache.get_lib('libz.a', create, what='port')]
 
 
 def clear(ports, settings, shared):
-  shared.Cache.erase_lib('libz.a')
-
-
-def process_args(ports):
-  return []
+  shared.cache.erase_lib('libz.a')
 
 
 def show():
-  return 'zlib (USE_ZLIB=1; zlib license)'
+  return 'zlib (-sUSE_ZLIB=1 or --use-port=zlib; zlib license)'
 
 
 zconf_h = r'''/* zconf.h -- configuration of the zlib compression library

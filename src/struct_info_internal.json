@@ -7,31 +7,27 @@
         "structs": {
             "pthread": [
               "profilerBlock",
-              "self",
-              "tsd",
               "stack",
               "stack_size",
-              "stack_owned",
-              "result",
-              "robust_list",
-              "tid",
-              "cancel",
-              "canceldisable",
-              "cancelasync",
-              "locale"
+              "waiting_async"
             ],
             "pthread_attr_t#": [
               "_a_transferredcanvases"
             ],
             "thread_profiler_block": [
                 "threadStatus",
-                "currentStatusStartTime",
                 "timeSpentInStatus",
                 "name"
             ]
         },
         "defines": [
           "SIGCANCEL"
+        ]
+    },
+    {
+        "file": "threading_internal.h",
+        "defines": [
+            "EM_THREAD_STATUS_NUMFIELDS"
         ]
     },
     {
@@ -44,17 +40,18 @@
               "mem_size",
               "table_addr",
               "table_size",
+              "file_data",
+              "file_data_size",
               "name"
             ]
         }
     },
     {
-        "file": "async_callback.h",
-        "structs": {
-            "CallbackState": [
-                "result",
-                "offset"
-            ]
-        }
+        "file": "proxying_notification_state.h",
+        "defines": [
+            "NOTIFICATION_NONE",
+            "NOTIFICATION_RECEIVED",
+            "NOTIFICATION_PENDING"
+        ]
     }
 ]

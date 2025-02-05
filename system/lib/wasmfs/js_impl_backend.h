@@ -3,13 +3,10 @@
 // University of Illinois/NCSA Open Source License.  Both these licenses can be
 // found in the LICENSE file.
 
-// This file defines the JS file backend and JS file of the new file system.
-// Current Status: Work in Progress.
-// See https://github.com/emscripten-core/emscripten/issues/15041.
-
 #pragma once
 
 #include "backend.h"
+#include "memory_backend.h"
 #include "support.h"
 #include "wasmfs.h"
 
@@ -43,7 +40,11 @@
 // For a simple example, see js_file_backend.cpp and library_wasmfs_js_file.js
 //
 
-using js_index_t = uint32_t;
+// Index type that is used on the JS side to refer to backands and file
+// handles.  Currently these are both passed as raw pointers rather than
+// integer handles which is why we use uintptr_t here.
+// TODO: Use a narrower type here and avoid passing raw pointers.
+using js_index_t = uintptr_t;
 
 extern "C" {
 // JSImpl API (see below for overview).
@@ -60,46 +61,44 @@ int _wasmfs_jsimpl_read(js_index_t backend,
                         size_t length,
                         off_t offset);
 int _wasmfs_jsimpl_get_size(js_index_t backend, js_index_t index);
+int _wasmfs_jsimpl_set_size(js_index_t backend, js_index_t index, off_t size);
 }
 
 namespace wasmfs {
 
 class JSImplFile : public DataFile {
   js_index_t getBackendIndex() {
-    static_assert(sizeof(backend_t) == sizeof(js_index_t), "TODO: wasm64");
+    static_assert(sizeof(backend_t) == sizeof(js_index_t));
     return js_index_t(getBackend());
   }
 
   js_index_t getFileIndex() {
-    static_assert(sizeof(this) == sizeof(js_index_t), "TODO: wasm64");
+    static_assert(sizeof(this) == sizeof(js_index_t));
     return js_index_t(this);
   }
 
   // TODO: Notify the JS about open and close events?
-  void open(oflags_t) override {}
-  void close() override {}
+  int open(oflags_t) override { return 0; }
+  int close() override { return 0; }
 
-  __wasi_errno_t write(const uint8_t* buf, size_t len, off_t offset) override {
+  ssize_t write(const uint8_t* buf, size_t len, off_t offset) override {
     return _wasmfs_jsimpl_write(
       getBackendIndex(), getFileIndex(), buf, len, offset);
   }
 
-  __wasi_errno_t read(uint8_t* buf, size_t len, off_t offset) override {
-    // The caller should have already checked that the offset + len does
-    // not exceed the file's size.
-    assert(offset + len <= getSize());
+  ssize_t read(uint8_t* buf, size_t len, off_t offset) override {
     return _wasmfs_jsimpl_read(
       getBackendIndex(), getFileIndex(), buf, len, offset);
   }
 
-  void flush() override {}
+  int flush() override { return 0; }
 
-  size_t getSize() override {
+  off_t getSize() override {
     return _wasmfs_jsimpl_get_size(getBackendIndex(), getFileIndex());
   }
 
-  void setSize(size_t size) override {
-    WASMFS_UNREACHABLE("TODO: JSImpl setSize");
+  int setSize(off_t size) override {
+    return _wasmfs_jsimpl_set_size(getBackendIndex(), getFileIndex(), size);
   }
 
 public:
@@ -115,6 +114,20 @@ public:
   std::shared_ptr<DataFile> createFile(mode_t mode) override {
     return std::make_shared<JSImplFile>(mode, this);
   }
+  std::shared_ptr<Directory> createDirectory(mode_t mode) override {
+    return std::make_shared<MemoryDirectory>(mode, this);
+  }
+  std::shared_ptr<Symlink> createSymlink(std::string target) override {
+    return std::make_shared<MemorySymlink>(target, this);
+  }
 };
+
+extern "C" {
+
+backend_t wasmfs_create_jsimpl_backend(void) {
+  return wasmFS.addBackend(std::make_unique<JSImplBackend>());
+}
+
+} // extern "C"
 
 } // namespace wasmfs

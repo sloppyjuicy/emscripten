@@ -4,62 +4,68 @@
 # found in the LICENSE file.
 
 import os
-import shutil
-import logging
-from pathlib import Path
 
-TAG = '1.6.37'
-HASH = '2ce2b855af307ca92a6e053f521f5d262c36eb836b4810cb53c809aa3ea2dcc08f834aee0ffd66137768a54397e28e92804534a74abb6fc9f6f3127f14c9c338'
+TAG = '1.6.39'
+HASH = '19851afffbe2ffde62d918f7e9017dec778a7ce9c60c75cdc65072f086e6cdc9d9895eb7b207535a84cb5f4ead77ebc2aa9d80025f153662903023e1f7ab9bae'
 
 deps = ['zlib']
+variants = {
+  'libpng-mt': {'PTHREADS': 1},
+  'libpng-legacysjlj': {'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': 1},
+  'libpng-mt-legacysjlj': {'PTHREADS': 1, 'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': 1},
+}
 
 
 def needed(settings):
   return settings.USE_LIBPNG
 
 
+def get_lib_name(settings):
+  suffix = ''
+  if settings.PTHREADS:
+    suffix += '-mt'
+  if settings.SUPPORT_LONGJMP == 'wasm':
+    suffix += '-legacysjlj'
+  return f'libpng{suffix}.a'
+
+
 def get(ports, settings, shared):
   # This is an emscripten-hosted mirror of the libpng repo from Sourceforge.
-  ports.fetch_project('libpng', 'https://storage.googleapis.com/webassembly/emscripten-ports/libpng-' + TAG + '.tar.gz', 'libpng-' + TAG, sha512hash=HASH)
+  ports.fetch_project('libpng', f'https://storage.googleapis.com/webassembly/emscripten-ports/libpng-{TAG}.tar.gz', sha512hash=HASH)
 
   def create(final):
-    logging.info('building port: libpng')
+    source_path = ports.get_dir('libpng', 'libpng-' + TAG)
+    ports.write_file(os.path.join(source_path, 'pnglibconf.h'), pnglibconf_h)
+    ports.install_headers(source_path)
 
-    source_path = os.path.join(ports.get_dir(), 'libpng', 'libpng-' + TAG)
-    dest_path = os.path.join(ports.get_build_dir(), 'libpng')
+    flags = ['-sUSE_ZLIB']
+    if settings.PTHREADS:
+      flags += ['-pthread']
+    if settings.SUPPORT_LONGJMP == 'wasm':
+      flags.append('-sSUPPORT_LONGJMP=wasm')
 
-    shutil.rmtree(dest_path, ignore_errors=True)
-    shutil.copytree(source_path, dest_path)
+    ports.build_port(source_path, final, 'libpng', flags=flags, exclude_files=['pngtest'], exclude_dirs=['scripts', 'contrib'])
 
-    Path(dest_path, 'pnglibconf.h').write_text(pnglibconf_h)
-    ports.install_headers(dest_path)
-
-    ports.build_port(dest_path, final, flags=['-sUSE_ZLIB=1'], exclude_files=['pngtest'], exclude_dirs=['scripts', 'contrib'])
-
-  return [shared.Cache.get_lib('libpng.a', create, what='port')]
+  return [shared.cache.get_lib(get_lib_name(settings), create, what='port')]
 
 
 def clear(ports, settings, shared):
-  shared.Cache.erase_lib('libpng.a')
+  shared.cache.erase_lib(get_lib_name(settings))
 
 
 def process_dependencies(settings):
   settings.USE_ZLIB = 1
 
 
-def process_args(ports):
-  return []
-
-
 def show():
-  return 'libpng (USE_LIBPNG=1; zlib license)'
+  return 'libpng (-sUSE_LIBPNG or --use-port=libpng; zlib license)'
 
 
 pnglibconf_h = r'''/* pnglibconf.h - library build configuration */
 
-/* libpng version 1.6.37 */
+/* libpng version 1.6.39 */
 
-/* Copyright (c) 2018-2019 Cosmin Truta */
+/* Copyright (c) 2018-2022 Cosmin Truta */
 /* Copyright (c) 1998-2002,2004,2006-2018 Glenn Randers-Pehrson */
 
 /* This code is released under the libpng license. */
@@ -331,7 +337,7 @@ be appreciated.
 #define PNG_USER_MEM_SUPPORTED
 #define PNG_USER_TRANSFORM_INFO_SUPPORTED
 #define PNG_USER_TRANSFORM_PTR_SUPPORTED
-/*#undef PNG_WARNINGS_SUPPORTED*/
+#undef PNG_WARNINGS_SUPPORTED
 #define PNG_WRITE_16BIT_SUPPORTED
 #define PNG_WRITE_ANCILLARY_CHUNKS_SUPPORTED
 #define PNG_WRITE_BGR_SUPPORTED

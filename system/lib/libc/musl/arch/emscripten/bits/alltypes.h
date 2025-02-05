@@ -4,6 +4,8 @@
 
 #define __BYTE_ORDER __LITTLE_ENDIAN
 
+#define __LONG_MAX  __LONG_MAX__
+
 #define _Addr __PTRDIFF_TYPE__
 #define _Int64 __INT64_TYPE__
 #define _Reg __PTRDIFF_TYPE__
@@ -41,14 +43,14 @@ typedef __WCHAR_TYPE__ wchar_t;
 
 #else
 #if defined(__NEED_wchar_t) && !defined(__DEFINED_wchar_t)
-typedef long wchar_t;
+typedef int wchar_t;
 #define __DEFINED_wchar_t
 #endif
 
 #endif
 #endif
 #if defined(__NEED_wint_t) && !defined(__DEFINED_wint_t)
-typedef unsigned wint_t;
+typedef __WINT_TYPE__ wint_t;
 #define __DEFINED_wint_t
 #endif
 
@@ -78,12 +80,12 @@ typedef long double double_t;
 #endif
 
 #if defined(__NEED_time_t) && !defined(__DEFINED_time_t)
-typedef long time_t;
+typedef _Int64 time_t;
 #define __DEFINED_time_t
 #endif
 
 #if defined(__NEED_suseconds_t) && !defined(__DEFINED_suseconds_t)
-typedef long suseconds_t;
+typedef int suseconds_t; /* XXX EMSCRIPTEN: ensure it's always 32-bits even in wasm64 */
 #define __DEFINED_suseconds_t
 #endif
 
@@ -93,7 +95,7 @@ typedef struct {
     union {
         int __i[10];
         volatile int __vi[10];
-        unsigned __s[10];
+        unsigned long __s[10];
     } __u;
 #ifdef __EMSCRIPTEN__
     // For canvas transfer implementation in Emscripten, use an extra control field
@@ -253,7 +255,7 @@ typedef unsigned int dev_t;
 #endif
 
 #if defined(__NEED_blksize_t) && !defined(__DEFINED_blksize_t)
-typedef long blksize_t;
+typedef int blksize_t; /* XXX EMSCRIPTEN: ensure it's always 32-bits even in wasm64 */
 #define __DEFINED_blksize_t
 #endif
 
@@ -278,7 +280,7 @@ typedef unsigned wint_t;
 #endif
 
 #if defined(__NEED_wctype_t) && !defined(__DEFINED_wctype_t)
-typedef unsigned long wctype_t;
+typedef unsigned int wctype_t; /* XXX EMSCRIPTEN: ensure it's always 32-bits even in wasm64 */
 #define __DEFINED_wctype_t
 #endif
 

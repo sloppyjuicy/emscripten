@@ -13,15 +13,16 @@
 
 #include "lsan.h"
 
-#include "sanitizer_common/sanitizer_flags.h"
-#include "sanitizer_common/sanitizer_flag_parser.h"
 #include "lsan_allocator.h"
 #include "lsan_common.h"
 #include "lsan_thread.h"
+#include "sanitizer_common/sanitizer_flag_parser.h"
+#include "sanitizer_common/sanitizer_flags.h"
+#include "sanitizer_common/sanitizer_interface_internal.h"
 
 #if SANITIZER_EMSCRIPTEN
-extern "C" void emscripten_builtin_free(void *);
-#include <emscripten/em_asm.h>
+#include "emscripten_internal.h"
+#include <emscripten/heap.h>
 #endif
 
 bool lsan_inited;
@@ -40,7 +41,7 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(
     uptr pc, uptr bp, void *context, bool request_fast, u32 max_depth) {
   using namespace __lsan;
   uptr stack_top = 0, stack_bottom = 0;
-  if (ThreadContext *t = CurrentThreadContext()) {
+  if (ThreadContextLsanBase *t = GetCurrentThread()) {
     stack_top = t->stack_end();
     stack_bottom = t->stack_begin();
   }
@@ -81,11 +82,7 @@ static void InitializeFlags() {
   const char *lsan_default_options = __lsan_default_options();
   parser.ParseString(lsan_default_options);
 #if SANITIZER_EMSCRIPTEN
-  char *options = (char*) EM_ASM_INT({
-    return withBuiltinMalloc(function () {
-      return allocateUTF8(Module['LSAN_OPTIONS'] || 0);
-    });
-  });
+  char *options = _emscripten_sanitizer_get_option("LSAN_OPTIONS");
   parser.ParseString(options);
   emscripten_builtin_free(options);
 #else
@@ -120,15 +117,14 @@ extern "C" void __lsan_init() {
   ReplaceSystemMalloc();
   InitTlsSize();
   InitializeInterceptors();
-  InitializeThreadRegistry();
+  InitializeThreads();
 #if !SANITIZER_EMSCRIPTEN
   // Emscripten does not have signals
   InstallDeadlySignalHandlers(LsanOnDeadlySignal);
 #endif
   InitializeMainThread();
-
-  if (common_flags()->detect_leaks && common_flags()->leak_check_at_exit)
-    Atexit(DoLeakCheck);
+  InstallAtExitCheckLeaks();
+  InstallAtForkHandler();
 
   InitializeCoverage(common_flags()->coverage, common_flags()->coverage_dir);
 

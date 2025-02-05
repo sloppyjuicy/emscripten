@@ -1,4 +1,4 @@
-//===----------------------- cxa_thread_atexit.cpp ------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,7 +8,7 @@
 
 #include "abort_message.h"
 #include "cxxabi.h"
-#include <__threading_support>
+#include <__thread/support.h>
 #ifndef _LIBCXXABI_HAS_NO_THREADS
 #if defined(__ELF__) && defined(_LIBCXXABI_LINK_PTHREAD_LIB)
 #pragma comment(lib, "pthread")
@@ -113,8 +113,8 @@ extern "C" {
     return __cxa_thread_atexit_impl(dtor, obj, dso_symbol);
 #else
 #ifndef __EMSCRIPTEN__
-    // Emscripten doesn't fully support weak undefined symbols yet
-    // https://github.com/emscripten-core/emscripten/issues/12819
+    // Emscripten doesn't implement __cxa_thread_atexit_impl, so we can simply
+    // avoid this check.
     if (__cxa_thread_atexit_impl) {
       return __cxa_thread_atexit_impl(dtor, obj, dso_symbol);
     } else
